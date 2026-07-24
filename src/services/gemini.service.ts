@@ -4,9 +4,9 @@ import { logger } from '../utils/logger';
 // Initialize the Google Generative AI client with your API key
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
-// Request the active gemini-2.5-flash model with standard SDK routing
+// Use the production gemini-2.0-flash model endpoint
 const model = genAI.getGenerativeModel({
-  model: 'gemini-2.5-flash',
+  model: 'gemini-2.0-flash',
   generationConfig: {
     responseMimeType: 'application/json',
   },
