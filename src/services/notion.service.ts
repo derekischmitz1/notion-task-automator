@@ -128,7 +128,7 @@ export class NotionService {
     try {
       // Auto-lookup assignment if not passed explicitly
       if (assignmentId === undefined) {
-        const isAcademicCategory = !category.includes('General') && !category.includes('Timed Events');
+        const isAcademicCategory = category && !category.includes('General') && !category.includes('Timed Events');
         const containsColon = taskName.includes(':');
 
         if (isAcademicCategory && containsColon && taskName !== 'Pending') {
@@ -147,9 +147,13 @@ export class NotionService {
           ],
         },
         Category: {
-          select: {
-            name: category,
-          },
+          rich_text: [
+            {
+              text: {
+                content: category || '',
+              },
+            },
+          ],
         },
         'Pull Date': {
           date: {
