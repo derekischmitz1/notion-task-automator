@@ -4,7 +4,7 @@ import { logger } from '../utils/logger';
 // Initialize the Google Generative AI client with your API key
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
-// Use the production gemini-2.0-flash model endpoint
+// Request the active gemini-2.0-flash model endpoint
 const model = genAI.getGenerativeModel({
   model: 'gemini-2.0-flash',
   generationConfig: {
@@ -17,12 +17,15 @@ export interface ExtractedTask {
   category: string;
 }
 
+// Helper utility for backoff delays
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
- * Parses email body content using Gemini into a structured task array
+ * Parses email body content using Gemini into a structured task array.
+ * Includes automatic retry handling for rate limits (429 errors).
  */
-export async function parseTaskFromEmail(emailBody: string): Promise<ExtractedTask[]> {
-  try {
-    const prompt = `You are an expert AI parser for inbound emails. Your job is to extract actionable tasks and structure them into a strict JSON array based on explicit formatting rules.
+export async function parseTaskFromEmail(emailBody: string, maxRetries = 3): Promise<ExtractedTask[]> {
+  const prompt = `You are an expert AI parser for inbound emails. Your job is to extract actionable tasks and structure them into a strict JSON array based on explicit formatting rules.
 
 ---
 ### EXTRACTION RULES:
@@ -65,16 +68,29 @@ Example output:
 ### EMAIL TO PARSE:
 ${emailBody}`;
 
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text();
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await model.generateContent(prompt);
+      const responseText = result.response.text();
 
-    // Clean up any markdown code block formatting if present
-    const jsonString = responseText.replace(/```json|```/g, '').trim();
-    const tasks: ExtractedTask[] = JSON.parse(jsonString);
+      // Clean up potential markdown code block formatting
+      const jsonString = responseText.replace(/```json|```/g, '').trim();
+      const tasks: ExtractedTask[] = JSON.parse(jsonString);
 
-    return tasks;
-  } catch (error) {
-    logger.error('Failed to parse email tasks using Gemini', { error });
-    throw error;
+      return tasks;
+    } catch (error: any) {
+      const isRateLimit = error?.status === 429 || error?.message?.includes('429');
+
+      if (isRateLimit && attempt < maxRetries) {
+        const backoffSec = attempt * 15;
+        logger.warn(`Gemini rate limit hit (429). Retrying in ${backoffSec} seconds (Attempt ${attempt}/${maxRetries})...`);
+        await sleep(backoffSec * 1000);
+      } else {
+        logger.error('Failed to parse email tasks using Gemini', { error });
+        throw error;
+      }
+    }
   }
+
+  throw new Error('Failed to parse tasks after reaching maximum retries.');
 }
