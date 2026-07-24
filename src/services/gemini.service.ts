@@ -1,12 +1,12 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { logger } from '../utils/logger';
 
-// Initialize the Google Generative AI client with your API key
+// Initialize the Google Generative AI client
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
-// Request the lightweight flash-lite model endpoint for higher rate limits
+// Use gemini-1.5-flash (universal free tier allocation)
 const model = genAI.getGenerativeModel({
-  model: 'gemini-2.0-flash-lite',
+  model: 'gemini-1.5-flash',
   generationConfig: {
     responseMimeType: 'application/json',
   },
@@ -17,12 +17,10 @@ export interface ExtractedTask {
   category: string;
 }
 
-// Helper utility for backoff delays
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Parses email body content using Gemini into a structured task array.
- * Includes automatic retry handling for rate limits (429 errors).
  */
 export async function parseTaskFromEmail(emailBody: string, maxRetries = 3): Promise<ExtractedTask[]> {
   const prompt = `You are an expert AI parser for inbound emails. Your job is to extract actionable tasks and structure them into a strict JSON array based on explicit formatting rules.
@@ -73,7 +71,6 @@ ${emailBody}`;
       const result = await model.generateContent(prompt);
       const responseText = result.response.text();
 
-      // Clean up potential markdown code block formatting
       const jsonString = responseText.replace(/```json|```/g, '').trim();
       const tasks: ExtractedTask[] = JSON.parse(jsonString);
 
