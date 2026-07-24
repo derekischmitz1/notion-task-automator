@@ -5,6 +5,11 @@ const notion = new Client({ auth: process.env.NOTION_API_KEY });
 const DAILY_DB = process.env.DAILY_TASKS_DB_ID!;
 const ASSIGNMENTS_DB = process.env.ASSIGNMENTS_DB_ID!;
 
+export interface ExtractedTask {
+  taskName: string;
+  category: string;
+}
+
 export class NotionService {
   static async findAssignment(title: string): Promise<string | null> {
     try {
@@ -19,10 +24,16 @@ export class NotionService {
     }
   }
 
-  static async createDailyTask(taskName: string, category: string, pullDate: string, assignmentId: string | null): Promise<string> {
+  static async createDailyTask(
+    taskName: string,
+    category: string,
+    pullDate: string,
+    assignmentId: string | null
+  ): Promise<string> {
     const properties: any = {
       'Task': { title: [{ text: { content: taskName } }] },
-      'Category': { select: { name: category } },
+      // Updated Category to rich_text format to match Notion database schema
+      'Category': { rich_text: [{ text: { content: category } }] },
       'Pull Date': { date: { start: pullDate } },
     };
 
@@ -44,9 +55,9 @@ export class NotionService {
         and: [
           { property: 'Done', checkbox: { equals: true } },
           { property: 'Completed On', date: { is_not_empty: true } },
-          { property: 'School Assignment', relation: { is_not_empty: true } }
-        ]
-      }
+          { property: 'School Assignment', relation: { is_not_empty: true } },
+        ],
+      },
     });
     return response.results;
   }
@@ -55,8 +66,8 @@ export class NotionService {
     await notion.pages.update({
       page_id: assignmentId,
       properties: {
-        'Done': { date: { start: completedOnDate } }
-      }
+        'Done': { date: { start: completedOnDate } },
+      },
     });
   }
 }
