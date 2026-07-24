@@ -1,26 +1,31 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { logger } from '../utils/logger';
 
+// Initialize the Google Generative AI client with your API key
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+
+// Request the gemini-1.5-flash model with native JSON output configured
+const model = genAI.getGenerativeModel(
+  {
+    model: 'gemini-1.5-flash',
+    generationConfig: {
+      responseMimeType: 'application/json',
+    },
+  },
+  { apiVersion: 'v1beta' }
+);
+
 export interface ExtractedTask {
   taskName: string;
   category: string;
 }
 
-const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
-
-export class GeminiService {
-  /**
-   * Parses inbound email content into structured tasks following custom workflow rules.
-   */
-  static async extractTasks(emailBody: string): Promise<ExtractedTask[]> {
-    try {
-      const model = genAI.getGenerativeModel(
-  { model: 'gemini-1.5-flash' },
-  { apiVersion: 'v1beta' }
-);
-
-      const prompt = `
-You are an expert AI parser for inbound emails. Your job is to extract actionable tasks and structure them into a strict JSON array based on explicit formatting rules.
+/**
+ * Parses email body content using Gemini into a structured task array
+ */
+export async function parseTaskFromEmail(emailBody: string): Promise<ExtractedTask[]> {
+  try {
+    const prompt = `You are an expert AI parser for inbound emails. Your job is to extract actionable tasks and structure them into a strict JSON array based on explicit formatting rules.
 
 ---
 ### EXTRACTION RULES:
@@ -61,26 +66,18 @@ Example output:
 
 ---
 ### EMAIL TO PARSE:
-${emailBody}
-`;
+${emailBody}`;
 
-      const result = await model.generateContent(prompt);
-      let responseText = result.response.text().trim();
+    const result = await model.generateContent(prompt);
+    const responseText = result.response.text();
 
-      // Clean markdown code blocks if present
-      if (responseText.startsWith('```json')) {
-        responseText = responseText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-      } else if (responseText.startsWith('```')) {
-        responseText = responseText.replace(/^```\s*/, '').replace(/\s*```$/, '');
-      }
+    // Clean up any markdown code block formatting if present
+    const jsonString = responseText.replace(/```json|```/g, '').trim();
+    const tasks: ExtractedTask[] = JSON.parse(jsonString);
 
-      const tasks: ExtractedTask[] = JSON.parse(responseText);
-      logger.info('Successfully parsed email tasks with Gemini', { count: tasks.length });
-
-      return tasks;
-    } catch (error) {
-      logger.error('Failed to parse email tasks using Gemini', { error });
-      throw error;
-    }
+    return tasks;
+  } catch (error) {
+    logger.error('Failed to parse email tasks using Gemini', { error });
+    throw error;
   }
 }
