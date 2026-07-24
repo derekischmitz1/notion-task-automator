@@ -4,16 +4,13 @@ import { logger } from '../utils/logger';
 // Initialize the Google Generative AI client with your API key
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
-// Request the gemini-1.5-flash model and explicitly force the stable v1 API
-const model = genAI.getGenerativeModel(
-  {
-    model: 'gemini-1.5-flash',
-    generationConfig: {
-      responseMimeType: 'application/json',
-    },
+// Request the active gemini-2.5-flash model with standard SDK routing
+const model = genAI.getGenerativeModel({
+  model: 'gemini-2.5-flash',
+  generationConfig: {
+    responseMimeType: 'application/json',
   },
-  { apiVersion: 'v1' } 
-);
+});
 
 export interface ExtractedTask {
   taskName: string;
