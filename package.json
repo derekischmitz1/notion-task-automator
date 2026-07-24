@@ -1,0 +1,37 @@
+{
+  "name": "notion-task-automator",
+  "version": "1.0.0",
+  "description": "Email to Notion Task Extractor and Sync",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "ts-node-dev src/server.ts",
+    "lint": "eslint src/**/*.ts",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.2.1",
+    "@notionhq/client": "^2.2.14",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "helmet": "^7.1.0",
+    "node-cron": "^3.0.3",
+    "pg": "^8.11.5",
+    "winston": "^3.13.0",
+    "zod": "^3.23.6"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.0.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/pg": "^8.11.6",
+    "eslint": "^9.0.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.2.5",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.4.5"
+  }
+}
