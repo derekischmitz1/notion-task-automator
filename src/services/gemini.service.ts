@@ -14,7 +14,10 @@ export class GeminiService {
    */
   static async extractTasks(emailBody: string): Promise<ExtractedTask[]> {
     try {
-      const model = ai.getGenerativeModel({ model: 'gemini-1.5-flash-latest' });
+      const model = genAI.getGenerativeModel(
+  { model: 'gemini-1.5-flash' },
+  { apiVersion: 'v1beta' }
+);
 
       const prompt = `
 You are an expert AI parser for inbound emails. Your job is to extract actionable tasks and structure them into a strict JSON array based on explicit formatting rules.
