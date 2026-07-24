@@ -1,30 +1,34 @@
-import { GeminiService, ExtractedTask } from './gemini.service';
+import { parseTaskFromEmail, ExtractedTask } from './gemini.service';
+import { NotionService } from './notion.service';
 import { logger } from '../utils/logger';
 
 export class TaskService {
+  /**
+   * Processes an email body, extracts tasks via Gemini, and adds them to Notion.
+   */
   static async processEmail(messageId: string, emailBody: string): Promise<void> {
     logger.info('Processing inbound email message', { messageId });
 
-    const extractedTasks: ExtractedTask[] = await GeminiService.extractTasks(emailBody);
+    try {
+      // 1. Parse email into an array of tasks using Gemini
+      const tasks: ExtractedTask[] = await parseTaskFromEmail(emailBody);
 
-    const hasGetDaUppy = extractedTasks.some(
-      (t: ExtractedTask) => t.taskName.toUpperCase() === 'GET DA UPPY'
-    );
+      logger.info(`Extracted ${tasks.length} task(s) from email.`);
 
-    if (!hasGetDaUppy) {
-      extractedTasks.unshift({
-        taskName: 'GET DA UPPY',
-        category: '1. General',
-      });
-    }
+      // 2. Iterate through extracted tasks and create each item in Notion
+      const notionService = new NotionService();
 
-    const uniqueCategories: string[] = Array.from(
-      new Set(extractedTasks.map((t: ExtractedTask) => t.category))
-    );
+      for (const task of tasks) {
+        await notionService.createTask({
+          title: task.taskName,
+          category: task.category,
+        });
+      }
 
-    for (const category of uniqueCategories) {
-      // Your Notion creation logic here
-      logger.info('Processing category', { category });
+      logger.info('Successfully processed all tasks into Notion', { messageId });
+    } catch (error) {
+      logger.error('Failed to process tasks from email', { messageId, error });
+      throw error;
     }
   }
 }
