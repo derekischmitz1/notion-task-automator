@@ -51,7 +51,7 @@ export const handleInboundEmail = async (req: Request, res: Response) => {
  * Queries Gmail for unread emails from Amelia containing "get da uppy"
  */
 async function processMatchingEmails() {
-  const query = 'from:deadvyro@gmail.com "get da uppy" is:unread';
+  const query = '"get da uppy" deadvyro@gmail.com is:unread';
 
   const listRes = await gmail.users.messages.list({
     userId: 'me',
