@@ -15,14 +15,20 @@ export class TaskService {
 
       logger.info(`Extracted ${tasks.length} task(s) from email.`);
 
-      // 2. Iterate through extracted tasks and create each item in Notion
-      const notionService = new NotionService();
+      // Get current date string in YYYY-MM-DD format for Notion 'Pull Date'
+      const pullDate = new Date().toISOString().split('T')[0];
 
+      // 2. Iterate through extracted tasks and create each item in Notion
       for (const task of tasks) {
-        await notionService.createTask({
-          title: task.taskName,
-          category: task.category,
-        });
+        // Look up if task matching the assignment name exists in Notion
+        const assignmentId = await NotionService.findAssignment(task.taskName);
+
+        await NotionService.createDailyTask(
+          task.taskName,
+          task.category,
+          pullDate,
+          assignmentId
+        );
       }
 
       logger.info('Successfully processed all tasks into Notion', { messageId });
