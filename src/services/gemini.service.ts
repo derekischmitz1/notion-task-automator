@@ -36,34 +36,45 @@ export async function parseTaskFromEmail(emailBody: string, maxRetriesPerModel =
    - Extract ONLY actionable tasks.
 
 2. **Mandatory Task**:
-   - ALWAYS include a task named "GET DA UPPY" under the category "1. General", even if it is not present in the email.
+   - ALWAYS include a task named "GET DA UPPY" under the category "1. General", even if it is not present in the email text.
 
-3. **Timed Task Rules**:
-   - If a task contains a time (e.g., "7:45a SHOWER", "7:45 AM SHOWER", "3:30p pickup", "1:30 p.m. Lunch"), convert the time into 24-hour HHMM format followed by a colon and the task name:
-     - "7:45a SHOWER" -> "0745: SHOWER"
-     - "3:30p pickup" -> "1530: pickup"
-     - "1:30 p.m. Lunch" -> "1330: Lunch"
-   - ALL timed tasks MUST be categorized under "2. Timed Events", regardless of section headers in the email.
+3. **Timed Task Identification & Formatting**:
+   - A task is ONLY a timed task if ITS OWN LINE explicitly contains a time prefix (e.g., "7:45a SHOWER", "9a: SHOWER", "10:30a: Brekkie and meds", "2p: UAB Graduate...").
+   - Convert the time into 24-hour HHMM format followed by a colon and the task name:
+     - "9a: SHOWER" -> "0900: SHOWER"
+     - "10:30a: Brekkie and meds" -> "1030: Brekkie and meds"
+     - "2p: UAB Graduate..." -> "1400: UAB Graduate..."
+   - ALL timed tasks MUST be categorized under "2. Timed Events".
 
-4. **Category Assignment Rules**:
-   - "1. General": Assigned for general non-timed tasks.
-   - "2. Timed Events": Assigned for all timed tasks.
-   - Other categories originate from email headers. Prefix headers with sequential numbers matching the order found (e.g., "Academic Tier 1:" becomes "3. Academic Tier 1", "Academic Tier 2:" becomes "4. Academic Tier 2").
+4. **Line-by-Line Isolation Rule (CRITICAL)**:
+   - Do NOT inherit the "2. Timed Events" category for subsequent lines just because they follow a timed line.
+   - Lines following a timed event that DO NOT have their own timestamp (e.g., "Brush teeth", "Put on deodorant", "Get dressed", "Shave", "Put hair up", "Play laser with Duster") MUST be assigned to "1. General".
 
-5. **Automatic Category Placeholders ("Pending")**:
-   - For EVERY category present in the output ("1. General", "2. Timed Events", "3. Academic Tier 1", etc.), ensure EXACTLY ONE placeholder task named "Pending" exists in that category.
+5. **Category Assignment Rules**:
+   - "1. General": Assigned to general, non-timed routine tasks.
+   - "2. Timed Events": Assigned ONLY to tasks that start with an explicit timestamp.
+   - Section Headers: Headers in the email (e.g., "Academic Tier 1:", "Academic Tier 2:") define new categories. Prefix these headers with sequential numbers matching their order of appearance (e.g., "Academic Tier 1:" becomes "3. Academic Tier 1", "Academic Tier 2:" becomes "4. Academic Tier 2").
+
+6. **Preserve Priority Numbers**:
+   - When extracting numbered academic items (e.g., "1. SOC 135: Overview...", "4. CHHS 402: Assignment 3..."), PRESERVE the item number at the beginning of the "taskName".
+
+7. **Automatic Category Placeholders ("Pending")**:
+   - For EVERY category generated in the output ("1. General", "2. Timed Events", "3. Academic Tier 1", etc.), ensure EXACTLY ONE placeholder task named "Pending" exists in that category.
 
 ---
 ### OUTPUT FORMAT REQUIREMENT:
 Return ONLY a valid raw JSON array of objects with keys "taskName" and "category". Do not wrap in markdown codeblocks if possible, or use standard JSON.
 
-Example output:
+Example output format:
 [
   { "taskName": "GET DA UPPY", "category": "1. General" },
+  { "taskName": "Brush teeth", "category": "1. General" },
   { "taskName": "Pending", "category": "1. General" },
-  { "taskName": "0745: SHOWER", "category": "2. Timed Events" },
-  { "taskName": "Pending", "category": "2. Timed Events" }
-]
+  { "taskName": "0900: SHOWER", "category": "2. Timed Events" },
+  { "taskName": "Pending", "category": "2. Timed Events" },
+  { "taskName": "1. SOC 135: Overview: Media, Sport & Sexuality", "category": "3. Academic Tier 1" },
+  { "taskName": "Pending", "category": "3. Academic Tier 1" }
+]`;
 
 ---
 ### EMAIL TO PARSE:
