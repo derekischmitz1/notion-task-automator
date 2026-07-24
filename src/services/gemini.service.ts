@@ -4,25 +4,28 @@ import { logger } from '../utils/logger';
 // Initialize the Google Generative AI client
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
-// Use gemini-1.5-flash (universal free tier allocation)
-const model = genAI.getGenerativeModel({
-  model: 'gemini-1.5-flash',
-  generationConfig: {
-    responseMimeType: 'application/json',
-  },
-});
-
 export interface ExtractedTask {
   taskName: string;
   category: string;
 }
 
+// Active models with non-zero quota, ordered by daily request limit (RPD) & RPM
+const MODEL_CANDIDATES = [
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash-lite',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+  'gemini-3-flash',
+  'gemini-2.5-flash',
+];
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Parses email body content using Gemini into a structured task array.
+ * Parses email body content using Gemini with automatic fallback across active quota models.
  */
-export async function parseTaskFromEmail(emailBody: string, maxRetries = 3): Promise<ExtractedTask[]> {
+export async function parseTaskFromEmail(emailBody: string, maxRetriesPerModel = 2): Promise<ExtractedTask[]> {
   const prompt = `You are an expert AI parser for inbound emails. Your job is to extract actionable tasks and structure them into a strict JSON array based on explicit formatting rules.
 
 ---
@@ -66,28 +69,45 @@ Example output:
 ### EMAIL TO PARSE:
 ${emailBody}`;
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const result = await model.generateContent(prompt);
-      const responseText = result.response.text();
+  let lastError: any = null;
 
-      const jsonString = responseText.replace(/```json|```/g, '').trim();
-      const tasks: ExtractedTask[] = JSON.parse(jsonString);
+  for (const modelName of MODEL_CANDIDATES) {
+    for (let attempt = 1; attempt <= maxRetriesPerModel; attempt++) {
+      try {
+        logger.info(`Attempting task parsing with candidate model: ${modelName} (Attempt ${attempt})`);
 
-      return tasks;
-    } catch (error: any) {
-      const isRateLimit = error?.status === 429 || error?.message?.includes('429');
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          generationConfig: {
+            responseMimeType: 'application/json',
+          },
+        });
 
-      if (isRateLimit && attempt < maxRetries) {
-        const backoffSec = attempt * 15;
-        logger.warn(`Gemini rate limit hit (429). Retrying in ${backoffSec} seconds (Attempt ${attempt}/${maxRetries})...`);
-        await sleep(backoffSec * 1000);
-      } else {
-        logger.error('Failed to parse email tasks using Gemini', { error });
-        throw error;
+        const result = await model.generateContent(prompt);
+        const responseText = result.response.text();
+
+        // Clean up markdown code block formatting if present
+        const jsonString = responseText.replace(/```json|```/g, '').trim();
+        const tasks: ExtractedTask[] = JSON.parse(jsonString);
+
+        logger.info(`Successfully parsed tasks using model: ${modelName}`);
+        return tasks;
+      } catch (error: any) {
+        lastError = error;
+        const status = error?.status || error?.response?.status || 'Error';
+        const isRateLimit = status === 429 || error?.message?.includes('429');
+
+        if (isRateLimit && attempt < maxRetriesPerModel) {
+          logger.warn(`Rate limit hit on '${modelName}'. Retrying in 3 seconds...`);
+          await sleep(3000);
+        } else {
+          logger.warn(`Model candidate '${modelName}' failed (${status}). Trying next candidate...`);
+          break; // Move to the next model in the list
+        }
       }
     }
   }
 
-  throw new Error('Failed to parse tasks after reaching maximum retries.');
+  logger.error('All available Gemini candidate models failed', { error: lastError });
+  throw lastError || new Error('Failed to parse tasks after attempting all active Gemini models.');
 }
