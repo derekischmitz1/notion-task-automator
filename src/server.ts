@@ -1,22 +1,21 @@
 import express from 'express';
-import helmet from 'helmet';
-import cors from 'cors';
-import { handleInboundEmail } from './controllers/email.controller';
+import { BackgroundScheduler } from './utils/scheduler';
 import { logger } from './utils/logger';
-import './jobs/cron'; // Initializes standard polling
 
 const app = express();
-
-app.use(helmet());
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-app.post('/api/webhooks/email', handleInboundEmail);
-
-app.get('/health', (req, res) => res.status(200).send('OK'));
-
 const PORT = process.env.PORT || 3000;
+
+app.use(express.json());
+
+// Your existing API routes / webhooks here...
+
 app.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
+  logger.info(`Server is running on port ${PORT}`);
+
+  // Start the background sync job inside the Web Service!
+  // Example: Run every 60 minutes
+  BackgroundScheduler.start(60, async () => {
+    logger.info('Running background sync process...');
+    // TODO: Call your sync logic / service method here
+  });
 });
