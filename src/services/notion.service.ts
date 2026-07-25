@@ -6,6 +6,71 @@ const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
 export class NotionService {
   /**
+   * Helper to extract a clean Notion Page ID string from strings, arrays, or objects.
+   */
+  private static extractId(input: any): string | null {
+    if (!input) return null;
+    if (typeof input === 'string') return input.trim();
+    if (Array.isArray(input) && input.length > 0) return NotionService.extractId(input[0]);
+    if (typeof input === 'object') {
+      if (input.id && typeof input.id === 'string') return input.id.trim();
+      if (input.page_id && typeof input.page_id === 'string') return input.page_id.trim();
+      if (input.relation && Array.isArray(input.relation) && input.relation.length > 0) {
+        return NotionService.extractId(input.relation[0]);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Helper to extract a valid ISO Date string (YYYY-MM-DD) from strings or objects.
+   */
+  private static extractIsoDate(input: any): string | null {
+    if (!input) return null;
+
+    let dateStr: string | null = null;
+
+    if (typeof input === 'string') {
+      dateStr = input.trim();
+    } else if (input instanceof Date) {
+      return input.toISOString().split('T')[0];
+    } else if (typeof input === 'object') {
+      if (input.start && typeof input.start === 'string') {
+        dateStr = input.start;
+      } else if (input.date && input.date.start) {
+        dateStr = input.date.start;
+      } else if (input.rollup && input.rollup.date && input.rollup.date.start) {
+        dateStr = input.rollup.date.start;
+      } else if (input.array && Array.isArray(input.array) && input.array.length > 0) {
+        return NotionService.extractIsoDate(input.array[0]);
+      }
+    }
+
+    if (!dateStr) return null;
+
+    // Convert US date format MM/DD/YYYY -> YYYY-MM-DD
+    const usMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (usMatch) {
+      const month = usMatch[1].padStart(2, '0');
+      const day = usMatch[2].padStart(2, '0');
+      const year = usMatch[3];
+      return `${year}-${month}-${day}`;
+    }
+
+    // Return standard YYYY-MM-DD if valid
+    if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+      return dateStr.split('T')[0];
+    }
+
+    const parsed = new Date(dateStr);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString().split('T')[0];
+    }
+
+    return null;
+  }
+
+  /**
    * Extracts class code and assignment name from strings like:
    * "1. SOC 135: Overview: Media, Sport & Sexuality (OVERDUE)"
    */
@@ -279,31 +344,49 @@ export class NotionService {
 
   /**
    * Updates the linked Assignment record's "Done" timestamp if it is currently empty.
-   * Note: Parameters changed to 'any' to handle raw Notion objects correctly.
    */
   public static async updateAssignmentDone(assignmentId: any, completedOn: any): Promise<void> {
     try {
-      // 1. Sanitize the Assignment ID in case SyncService passes the raw relation array
-      let cleanAssignmentId = assignmentId;
-      if (Array.isArray(assignmentId) && assignmentId.length > 0) {
-        cleanAssignmentId = assignmentId[0].id;
-      } else if (typeof assignmentId === 'object' && assignmentId !== null) {
-        cleanAssignmentId = assignmentId.id || assignmentId.page_id;
+      // 1. Robustly extract clean Assignment Page ID
+      const cleanAssignmentId = NotionService.extractId(assignmentId);
+
+      if (!cleanAssignmentId) {
+        logger.warn(`updateAssignmentDone received an empty or invalid assignment ID. Skipping.`);
+        return;
       }
 
-      if (!cleanAssignmentId || typeof cleanAssignmentId !== 'string') {
-        throw new Error(`Invalid assignment ID format provided to updateAssignmentDone`);
+      // 2. Robustly extract clean ISO Date string (YYYY-MM-DD)
+      const cleanCompletedOn = NotionService.extractIsoDate(completedOn);
+
+      if (!cleanCompletedOn) {
+        logger.warn(`updateAssignmentDone received an invalid date format for assignment (${cleanAssignmentId}). Skipping.`);
+        return;
       }
 
-      // 2. Sanitize the Completed Date string in case it is passed as a raw date object
-      let cleanCompletedOn = completedOn;
-      if (typeof completedOn === 'object' && completedOn !== null) {
-        cleanCompletedOn = completedOn.start || completedOn.date?.start;
+      // 3. Retrieve target Notion page
+      const assignmentPage = (await notion.pages.retrieve({ page_id: cleanAssignmentId })) as any;
+
+      if (!assignmentPage || !assignmentPage.properties) {
+        logger.warn(`Could not retrieve page properties for Assignment ID: ${cleanAssignmentId}`);
+        return;
       }
 
-      // Retrieve the current assignment page to check the existing 'Done' property
-      const assignmentPage = await notion.pages.retrieve({ page_id: cleanAssignmentId }) as any;
-      const currentDoneDate = assignmentPage.properties['Done']?.date?.start;
+      const doneProp = assignmentPage.properties['Done'];
+
+      if (!doneProp) {
+        logger.warn(`Page (${cleanAssignmentId}) does not have a 'Done' property. Skipping.`);
+        return;
+      }
+
+      // Verify that 'Done' is a Date property before updating to prevent Notion DB errors
+      if (doneProp.type !== 'date') {
+        logger.warn(
+          `Target page (${cleanAssignmentId}) property 'Done' is of type '${doneProp.type}' (expected 'date'). Skipping update.`
+        );
+        return;
+      }
+
+      const currentDoneDate = doneProp.date?.start;
 
       // Only update if there isn't already a date in the 'Done' column
       if (!currentDoneDate) {
@@ -319,12 +402,13 @@ export class NotionService {
         });
         logger.info(`Updated Assignment (${cleanAssignmentId}) 'Done' to ${cleanCompletedOn}`);
       } else {
-        logger.info(`Assignment (${cleanAssignmentId}) already has a 'Done' date (${currentDoneDate}). Skipping update.`);
+        logger.info(
+          `Assignment (${cleanAssignmentId}) already has a 'Done' date (${currentDoneDate}). Skipping update.`
+        );
       }
     } catch (error) {
       logger.error(`Failed to update Assignment in Notion:`, error);
-      // Throw error up so the sync service logs the specific taskId that failed
-      throw error; 
+      throw error;
     }
   }
 }
@@ -333,7 +417,7 @@ export class NotionService {
 export const createDailyTasks = async (tasks: ExtractedTask[], pullDate: string) => {
   // Reset the task counter before adding the new batch
   await NotionService.resetTaskCounter();
-  
+
   for (const task of tasks) {
     const assignmentId = await NotionService.findAssignment(task.taskName);
     await NotionService.createDailyTask(task, pullDate, assignmentId);
