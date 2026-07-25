@@ -24,6 +24,49 @@ export class NotionService {
   }
 
   /**
+   * Resets the Global Task Counter to 0 inside the System Settings database.
+   */
+  public static async resetTaskCounter(): Promise<void> {
+    const settingsDbId = process.env.NOTION_SYSTEM_SETTINGS_DB_ID || '';
+    if (!settingsDbId) {
+      logger.warn('NOTION_SYSTEM_SETTINGS_DB_ID is not configured in environment variables.');
+      return;
+    }
+
+    try {
+      const response = await notion.databases.query({
+        database_id: settingsDbId,
+        filter: {
+          property: 'ID',
+          title: {
+            equals: 'Global',
+          },
+        },
+      });
+
+      if (response.results.length === 0) {
+        logger.warn('No record found with ID "Global" in the Task Counter database.');
+        return;
+      }
+
+      const globalRecordId = response.results[0].id;
+
+      await notion.pages.update({
+        page_id: globalRecordId,
+        properties: {
+          'Current Count': {
+            number: 0,
+          },
+        },
+      });
+
+      logger.info('Successfully reset Global Task Counter to 0.');
+    } catch (error) {
+      logger.error('Failed to reset Task Counter in Notion:', error);
+    }
+  }
+
+  /**
    * Searches the Notion Assignments database by Class title & Assignment rich_text.
    */
   public static async findAssignment(taskName: string): Promise<string | null> {
@@ -258,6 +301,9 @@ export class NotionService {
 
 // Standalone function export alias for backwards compatibility
 export const createDailyTasks = async (tasks: ExtractedTask[], pullDate: string) => {
+  // Reset the task counter before adding the new batch
+  await NotionService.resetTaskCounter();
+  
   for (const task of tasks) {
     const assignmentId = await NotionService.findAssignment(task.taskName);
     await NotionService.createDailyTask(task, pullDate, assignmentId);
