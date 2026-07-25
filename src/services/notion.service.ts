@@ -128,10 +128,10 @@ export class NotionService {
     try {
       // Auto-lookup assignment if not passed explicitly
       if (assignmentId === undefined) {
-        const isAcademicCategory = category && !category.includes('General') && !category.includes('Timed Events');
+        const isNotGeneral = category && !category.includes('General');
         const containsColon = taskName.includes(':');
 
-        if (isAcademicCategory && containsColon && taskName !== 'Pending') {
+        if (isNotGeneral && containsColon && taskName !== 'Pending') {
           assignmentId = await NotionService.findAssignment(taskName);
         }
       }
