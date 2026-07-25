@@ -278,21 +278,30 @@ export class NotionService {
   }
 
   /**
-   * Updates the linked Assignment record's "Done Daily Pull" timestamp.
+   * Updates the linked Assignment record's "Done" timestamp if it is currently empty.
    */
   public static async updateAssignmentDone(assignmentId: string, completedOn: string): Promise<void> {
     try {
-      await notion.pages.update({
-        page_id: assignmentId,
-        properties: {
-          'Done Daily Pull': {
-            date: {
-              start: completedOn,
+      // Retrieve the current assignment page to check the existing 'Done' property
+      const assignmentPage = await notion.pages.retrieve({ page_id: assignmentId }) as any;
+      const currentDoneDate = assignmentPage.properties['Done']?.date?.start;
+
+      // Only update if there isn't already a date in the 'Done' column
+      if (!currentDoneDate) {
+        await notion.pages.update({
+          page_id: assignmentId,
+          properties: {
+            'Done': {
+              date: {
+                start: completedOn,
+              },
             },
           },
-        },
-      });
-      logger.info(`Updated Assignment (${assignmentId}) 'Done Daily Pull' to ${completedOn}`);
+        });
+        logger.info(`Updated Assignment (${assignmentId}) 'Done' to ${completedOn}`);
+      } else {
+        logger.info(`Assignment (${assignmentId}) already has a 'Done' date (${currentDoneDate}). Skipping update.`);
+      }
     } catch (error) {
       logger.error(`Failed to update Assignment (${assignmentId}) in Notion:`, error);
     }
