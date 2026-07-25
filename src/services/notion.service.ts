@@ -279,31 +279,52 @@ export class NotionService {
 
   /**
    * Updates the linked Assignment record's "Done" timestamp if it is currently empty.
+   * Note: Parameters changed to 'any' to handle raw Notion objects correctly.
    */
-  public static async updateAssignmentDone(assignmentId: string, completedOn: string): Promise<void> {
+  public static async updateAssignmentDone(assignmentId: any, completedOn: any): Promise<void> {
     try {
+      // 1. Sanitize the Assignment ID in case SyncService passes the raw relation array
+      let cleanAssignmentId = assignmentId;
+      if (Array.isArray(assignmentId) && assignmentId.length > 0) {
+        cleanAssignmentId = assignmentId[0].id;
+      } else if (typeof assignmentId === 'object' && assignmentId !== null) {
+        cleanAssignmentId = assignmentId.id || assignmentId.page_id;
+      }
+
+      if (!cleanAssignmentId || typeof cleanAssignmentId !== 'string') {
+        throw new Error(`Invalid assignment ID format provided to updateAssignmentDone`);
+      }
+
+      // 2. Sanitize the Completed Date string in case it is passed as a raw date object
+      let cleanCompletedOn = completedOn;
+      if (typeof completedOn === 'object' && completedOn !== null) {
+        cleanCompletedOn = completedOn.start || completedOn.date?.start;
+      }
+
       // Retrieve the current assignment page to check the existing 'Done' property
-      const assignmentPage = await notion.pages.retrieve({ page_id: assignmentId }) as any;
+      const assignmentPage = await notion.pages.retrieve({ page_id: cleanAssignmentId }) as any;
       const currentDoneDate = assignmentPage.properties['Done']?.date?.start;
 
       // Only update if there isn't already a date in the 'Done' column
       if (!currentDoneDate) {
         await notion.pages.update({
-          page_id: assignmentId,
+          page_id: cleanAssignmentId,
           properties: {
             'Done': {
               date: {
-                start: completedOn,
+                start: cleanCompletedOn,
               },
             },
           },
         });
-        logger.info(`Updated Assignment (${assignmentId}) 'Done' to ${completedOn}`);
+        logger.info(`Updated Assignment (${cleanAssignmentId}) 'Done' to ${cleanCompletedOn}`);
       } else {
-        logger.info(`Assignment (${assignmentId}) already has a 'Done' date (${currentDoneDate}). Skipping update.`);
+        logger.info(`Assignment (${cleanAssignmentId}) already has a 'Done' date (${currentDoneDate}). Skipping update.`);
       }
     } catch (error) {
-      logger.error(`Failed to update Assignment (${assignmentId}) in Notion:`, error);
+      logger.error(`Failed to update Assignment in Notion:`, error);
+      // Throw error up so the sync service logs the specific taskId that failed
+      throw error; 
     }
   }
 }
