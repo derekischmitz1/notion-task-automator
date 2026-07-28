@@ -16,6 +16,9 @@ if (process.env.GMAIL_REFRESH_TOKEN) {
 
 const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
 
+// In-flight memory tracker to prevent duplicate concurrent processing of the same email
+const processingMessages = new Set<string>();
+
 /**
  * Express Route Handler: Listens for incoming Google Pub/Sub push notifications
  */
@@ -67,27 +70,42 @@ async function processMatchingEmails() {
   for (const msg of messages) {
     if (!msg.id) continue;
 
-    const msgRes = await gmail.users.messages.get({
-      userId: 'me',
-      id: msg.id,
-      format: 'full',
-    });
-
     const messageId = msg.id;
-    const body = extractBody(msgRes.data.payload);
 
-    if (body) {
-      logger.info(`Processing email ID: ${messageId}`);
-      await TaskService.processEmail(messageId, body);
+    // Guard: Skip processing if another execution is actively parsing this email ID
+    if (processingMessages.has(messageId)) {
+      logger.info(`Skipping duplicate execution for email ID: ${messageId}`);
+      continue;
+    }
 
-      // Mark email as read after processing so it isn't picked up again
-      await gmail.users.messages.batchModify({
+    // Lock email ID
+    processingMessages.add(messageId);
+
+    try {
+      const msgRes = await gmail.users.messages.get({
         userId: 'me',
-        requestBody: {
-          ids: [messageId],
-          removeLabelIds: ['UNREAD'],
-        },
+        id: messageId,
+        format: 'full',
       });
+
+      const body = extractBody(msgRes.data.payload);
+
+      if (body) {
+        logger.info(`Processing email ID: ${messageId}`);
+        await TaskService.processEmail(messageId, body);
+
+        // Mark email as read after processing so it isn't picked up again
+        await gmail.users.messages.batchModify({
+          userId: 'me',
+          requestBody: {
+            ids: [messageId],
+            removeLabelIds: ['UNREAD'],
+          },
+        });
+      }
+    } finally {
+      // Unlock email ID regardless of success or failure
+      processingMessages.delete(messageId);
     }
   }
 }

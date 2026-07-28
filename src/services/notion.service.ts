@@ -71,19 +71,26 @@ export class NotionService {
   }
 
   /**
-   * Extracts class code and assignment name from strings like:
-   * "1. SOC 135: Overview: Media, Sport & Sexuality (OVERDUE)"
+   * Extracts class code and assignment name from task strings like:
+   * "3.1. CHHS 402-H: Task 3.2..." -> { classCode: "CHHS 402-H", assignmentText: "Task 3.2..." }
+   * Handles multi-level numeric prefixes (e.g., "3.1. ", "4.10. ") and validates course format.
    */
   private static parseAcademicTaskName(taskName: string): { classCode: string; assignmentText: string } | null {
-    // Strip leading priority prefix if present (e.g., "1. ", "12. ")
-    const cleanName = taskName.replace(/^\d+\.\s*/, '').trim();
+    // Strip ALL leading numeric/dot prefixes and spaces (e.g., "3.1. ", "12. ", "4.10. ")
+    const cleanName = taskName.replace(/^[\d.\s]+/, '').trim();
 
     // Split on the FIRST colon to separate Class Code from Assignment Name
     const firstColonIndex = cleanName.indexOf(':');
     if (firstColonIndex === -1) return null;
 
-    const classCode = cleanName.substring(0, firstColonIndex).trim(); // e.g. "SOC 135"
-    const assignmentText = cleanName.substring(firstColonIndex + 1).trim(); // e.g. "Overview: Media, Sport & Sexuality"
+    const classCode = cleanName.substring(0, firstColonIndex).trim();
+    const assignmentText = cleanName.substring(firstColonIndex + 1).trim();
+
+    // Validate that classCode looks like an academic course code (e.g., "CHHS 402-H", "PUH 201-F", "SOC 135")
+    // Valid course codes start with 2-4 uppercase letters followed by digits
+    if (!/^[A-Z]{2,4}\s+\d{3}/i.test(classCode)) {
+      return null;
+    }
 
     return { classCode, assignmentText };
   }
