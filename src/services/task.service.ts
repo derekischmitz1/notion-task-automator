@@ -46,7 +46,7 @@ export class TaskService {
         // Skip duplicate task creation if it already exists in Notion for today
         const exists = await NotionService.taskExists(task.taskName, pullDate);
         if (exists) {
-          logger.info(`Task "${task.taskName}" already exists for ${pullDate}. Skipping creation.`);
+          logger.info(`Task "${task.taskName}" already exists in Notion for ${pullDate}. Skipping creation.`);
           continue;
         }
 
@@ -62,9 +62,11 @@ export class TaskService {
 
         const notionId = notionResponse?.id || null;
 
-        // Record task in Supabase database for calendar processing tracking
+        // Record task in Supabase database; silently ignore if unique constraint fires
         await pool.query(
-          'INSERT INTO processed_tasks (notion_id, task_name, category, pull_date) VALUES ($1, $2, $3, $4)',
+          `INSERT INTO processed_tasks (notion_id, task_name, category, pull_date) 
+           VALUES ($1, $2, $3, $4) 
+           ON CONFLICT DO NOTHING`,
           [notionId, task.taskName, task.category, pullDate]
         );
       }
