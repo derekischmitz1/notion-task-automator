@@ -15,6 +15,7 @@ export class TaskService {
         notion_id VARCHAR(255),
         task_name VARCHAR(255) NOT NULL,
         category VARCHAR(255) NOT NULL,
+        pull_date VARCHAR(255),
         processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         gcal_event_id VARCHAR(255)
       );
@@ -63,8 +64,8 @@ export class TaskService {
 
         // Record task in Supabase database for calendar processing tracking
         await pool.query(
-          'INSERT INTO processed_tasks (notion_id, task_name, category) VALUES ($1, $2, $3)',
-          [notionId, task.taskName, task.category]
+          'INSERT INTO processed_tasks (notion_id, task_name, category, pull_date) VALUES ($1, $2, $3, $4)',
+          [notionId, task.taskName, task.category, pullDate]
         );
       }
 
