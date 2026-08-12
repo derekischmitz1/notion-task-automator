@@ -3,7 +3,7 @@ import { logger } from '../utils/logger';
 
 async function run() {
   try {
-    await SyncService.syncAssignments();
+    await SyncService.runFullSync();
     logger.info('Standalone cron run complete');
     process.exit(0);
   } catch (error) {

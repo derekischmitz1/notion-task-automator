@@ -6,7 +6,7 @@ import { logger } from '../utils/logger';
 cron.schedule('*/5 * * * *', async () => {
   logger.info('Cron triggered: Syncing Assignments');
   try {
-    await SyncService.syncAssignments();
+    await SyncService.runFullSync();
   } catch (error) {
     logger.error('Cron job error', { error });
   }

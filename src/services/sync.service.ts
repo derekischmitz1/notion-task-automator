@@ -1,10 +1,32 @@
 import { pool } from '../config/db';
 import { NotionService } from './notion.service';
+import { createEventIfNoConflicts } from './calendar.service';
 import { logger } from '../utils/logger';
+
+/**
+ * Parses a timed task string like "2.0900: SHOWER" into a clean title and today's ISO start time.
+ */
+function parseTimeToIso(taskName: string): { cleanTitle: string; startTimeIso: string } | null {
+  // Matches "2." followed by 2 digits for hour, 2 digits for minute, a colon, and the title
+  const match = taskName.match(/^2\.(\d{2})(\d{2}):\s*(.*)$/);
+  if (!match) return null;
+
+  const [, hoursStr, minutesStr, cleanTitle] = match;
+  const hours = parseInt(hoursStr, 10);
+  const minutes = parseInt(minutesStr, 10);
+
+  const eventDate = new Date();
+  eventDate.setHours(hours, minutes, 0, 0);
+
+  return {
+    cleanTitle: cleanTitle.trim(),
+    startTimeIso: eventDate.toISOString(),
+  };
+}
 
 export class SyncService {
   /**
-   * Ensures the sync_history database table exists before querying.
+   * Ensures necessary sync tables exist before querying.
    */
   private static async ensureTableExists(): Promise<void> {
     await pool.query(`
@@ -18,11 +40,59 @@ export class SyncService {
     `);
   }
 
-  static async syncAssignments() {
+  /**
+   * Scans processed tasks for timed events and pushes non-conflicting items to Google Calendar.
+   */
+  static async syncCalendarEvents(): Promise<void> {
+    logger.info('Starting Google Calendar event sync...');
+
+    try {
+      // Find all timed tasks in Supabase that have not yet been evaluated for Google Calendar
+      const { rows: pendingTasks } = await pool.query(
+        `SELECT id, task_name FROM processed_tasks 
+         WHERE (category = '2. Timed Events' OR task_name LIKE '2.%') 
+         AND gcal_event_id IS NULL`
+      );
+
+      for (const task of pendingTasks) {
+        const timeData = parseTimeToIso(task.task_name);
+
+        if (!timeData) {
+          // Mark invalidly formatted tasks as skipped to avoid re-evaluating on future runs
+          await pool.query(
+            'UPDATE processed_tasks SET gcal_event_id = $1 WHERE id = $2',
+            ['SKIPPED_INVALID_FORMAT', task.id]
+          );
+          continue;
+        }
+
+        // Attempt calendar creation (handles multi-calendar conflict checking internally)
+        const gcalEventId = await createEventIfNoConflicts(
+          timeData.cleanTitle,
+          timeData.startTimeIso,
+          task.id.toString()
+        );
+
+        if (!gcalEventId) {
+          // If skipped due to conflict or API restriction, mark so we don't retry endlessly
+          await pool.query(
+            'UPDATE processed_tasks SET gcal_event_id = $1 WHERE id = $2',
+            ['SKIPPED_CONFLICT', task.id]
+          );
+        }
+      }
+    } catch (error) {
+      logger.error('Failed during calendar events sync', { error });
+    }
+  }
+
+  /**
+   * Syncs completed tasks to their respective Notion school assignments.
+   */
+  static async syncAssignments(): Promise<void> {
     logger.info('Starting assignment completion sync...');
 
     try {
-      // Auto-create table if it hasn't been initialized in PostgreSQL yet
       await SyncService.ensureTableExists();
     } catch (dbInitError) {
       logger.error('Failed to initialize sync_history table in PostgreSQL database:', { error: dbInitError });
@@ -62,8 +132,16 @@ export class SyncService {
           logger.info('Successfully synced assignment completion', { taskId, assignmentId });
         }
       } catch (error) {
-         logger.error('Failed to sync a task', { taskId: task.id, error });
+        logger.error('Failed to sync a task', { taskId: task.id, error });
       }
     }
+  }
+
+  /**
+   * Master sync runner to execute both task assignment updates and calendar event mappings.
+   */
+  static async runFullSync(): Promise<void> {
+    await SyncService.syncAssignments();
+    await SyncService.syncCalendarEvents();
   }
 }
