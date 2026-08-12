@@ -4,23 +4,24 @@ import { createEventIfNoConflicts } from './calendar.service';
 import { logger } from '../utils/logger';
 
 /**
- * Parses a timed task string like "2.0900: SHOWER" into a clean title and today's ISO start time.
+ * Parses a timed task string like "2.0900: SHOWER" or "2.900: SHOWER" into a clean title and today's ISO start time.
  */
 function parseTimeToIso(taskName: string): { cleanTitle: string; startTimeIso: string } | null {
-  // Matches "2." followed by 2 digits for hour, 2 digits for minute, a colon, and the title
-  const match = taskName.match(/^2\.(\d{2})(\d{2}):\s*(.*)$/);
+  const match = taskName.match(/^2\.(\d{1,2})(\d{2}):\s*(.*)$/);
   if (!match) return null;
 
   const [, hoursStr, minutesStr, cleanTitle] = match;
-  const hours = parseInt(hoursStr, 10);
-  const minutes = parseInt(minutesStr, 10);
+  const formattedHours = hoursStr.padStart(2, '0');
 
-  const eventDate = new Date();
-  eventDate.setHours(hours, minutes, 0, 0);
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+
+  const localIsoString = `${dateStr}T${formattedHours}:${minutesStr}:00-05:00`;
+  const startTime = new Date(localIsoString);
 
   return {
     cleanTitle: cleanTitle.trim(),
-    startTimeIso: eventDate.toISOString(),
+    startTimeIso: startTime.toISOString(),
   };
 }
 
@@ -47,18 +48,19 @@ export class SyncService {
     logger.info('Starting Google Calendar event sync...');
 
     try {
-      // Find all timed tasks in Supabase that have not yet been evaluated for Google Calendar
       const { rows: pendingTasks } = await pool.query(
-        `SELECT id, task_name FROM processed_tasks 
+        `SELECT id, task_name, category FROM processed_tasks 
          WHERE (category = '2. Timed Events' OR task_name LIKE '2.%') 
          AND gcal_event_id IS NULL`
       );
+
+      logger.info(`Found ${pendingTasks.length} pending timed task(s) to evaluate for Google Calendar.`);
 
       for (const task of pendingTasks) {
         const timeData = parseTimeToIso(task.task_name);
 
         if (!timeData) {
-          // Mark invalidly formatted tasks as skipped to avoid re-evaluating on future runs
+          logger.warn(`Task ID ${task.id} ("${task.task_name}") failed time parsing. Marking as SKIPPED_INVALID_FORMAT.`);
           await pool.query(
             'UPDATE processed_tasks SET gcal_event_id = $1 WHERE id = $2',
             ['SKIPPED_INVALID_FORMAT', task.id]
@@ -66,15 +68,22 @@ export class SyncService {
           continue;
         }
 
-        // Attempt calendar creation (handles multi-calendar conflict checking internally)
+        logger.info(`Attempting calendar creation for Task ID ${task.id}: "${timeData.cleanTitle}" at ${timeData.startTimeIso}`);
+
         const gcalEventId = await createEventIfNoConflicts(
           timeData.cleanTitle,
           timeData.startTimeIso,
           task.id.toString()
         );
 
-        if (!gcalEventId) {
-          // If skipped due to conflict or API restriction, mark so we don't retry endlessly
+        if (gcalEventId) {
+          logger.info(`Successfully created Google Calendar event ${gcalEventId} for Task ID ${task.id}.`);
+          await pool.query(
+            'UPDATE processed_tasks SET gcal_event_id = $1 WHERE id = $2',
+            [gcalEventId, task.id]
+          );
+        } else {
+          logger.warn(`Could not create event for Task ID ${task.id} ("${timeData.cleanTitle}"). Marking as SKIPPED_CONFLICT.`);
           await pool.query(
             'UPDATE processed_tasks SET gcal_event_id = $1 WHERE id = $2',
             ['SKIPPED_CONFLICT', task.id]
@@ -106,7 +115,6 @@ export class SyncService {
         const taskId = task.id;
         const taskName = task.properties['Task']?.title[0]?.plain_text || 'Unknown';
         
-        // Skip placeholders
         if (taskName === 'Pending' || taskName.toUpperCase() === 'GET DA UPPY') continue;
 
         const assignmentRelations = task.properties['School Assignment']?.relation;
@@ -117,7 +125,6 @@ export class SyncService {
 
         if (!completedOn) continue;
 
-        // Check if already synced
         const check = await pool.query(
           'SELECT id FROM sync_history WHERE task_notion_id = $1 AND assignment_notion_id = $2',
           [taskId, assignmentId]
@@ -138,7 +145,7 @@ export class SyncService {
   }
 
   /**
-   * Master sync runner to execute both task assignment updates and calendar event mappings.
+   * Master sync runner.
    */
   static async runFullSync(): Promise<void> {
     await SyncService.syncAssignments();

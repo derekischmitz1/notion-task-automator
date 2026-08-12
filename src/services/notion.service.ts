@@ -48,7 +48,6 @@ export class NotionService {
 
     if (!dateStr) return null;
 
-    // Convert US date format MM/DD/YYYY -> YYYY-MM-DD
     const usMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (usMatch) {
       const month = usMatch[1].padStart(2, '0');
@@ -57,7 +56,6 @@ export class NotionService {
       return `${year}-${month}-${day}`;
     }
 
-    // Return standard YYYY-MM-DD if valid
     if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
       return dateStr.split('T')[0];
     }
@@ -71,23 +69,16 @@ export class NotionService {
   }
 
   /**
-   * Extracts class code and assignment name from task strings like:
-   * "3.1. CHHS 402-H: Task 3.2..." -> { classCode: "CHHS 402-H", assignmentText: "Task 3.2..." }
-   * Handles multi-level numeric prefixes (e.g., "3.1. ", "4.10. ") and validates course format.
+   * Extracts class code and assignment name from task strings.
    */
   private static parseAcademicTaskName(taskName: string): { classCode: string; assignmentText: string } | null {
-    // Strip ALL leading numeric/dot prefixes and spaces (e.g., "3.1. ", "12. ", "4.10. ")
     const cleanName = taskName.replace(/^[\d.\s]+/, '').trim();
-
-    // Split on the FIRST colon to separate Class Code from Assignment Name
     const firstColonIndex = cleanName.indexOf(':');
     if (firstColonIndex === -1) return null;
 
     const classCode = cleanName.substring(0, firstColonIndex).trim();
     const assignmentText = cleanName.substring(firstColonIndex + 1).trim();
 
-    // Validate that classCode looks like an academic course code (e.g., "CHHS 402-H", "PUH 201-F", "SOC 135")
-    // Valid course codes start with 2-4 uppercase letters followed by digits
     if (!/^[A-Z]{2,4}\s+\d{3}/i.test(classCode)) {
       return null;
     }
@@ -96,9 +87,9 @@ export class NotionService {
   }
 
   /**
-   * Checks if a task with the exact same task name and pull date already exists in Notion.
+   * Checks if a task with the same name, category, and pull date exists in Notion.
    */
-  public static async taskExists(taskName: string, pullDate: string): Promise<boolean> {
+  public static async taskExists(taskName: string, category: string, pullDate: string): Promise<boolean> {
     const databaseId = process.env.NOTION_DATABASE_ID;
     if (!databaseId) return false;
 
@@ -114,6 +105,12 @@ export class NotionService {
               },
             },
             {
+              property: 'Category',
+              rich_text: {
+                equals: category,
+              },
+            },
+            {
               property: 'Pull Date',
               date: {
                 equals: pullDate,
@@ -125,7 +122,7 @@ export class NotionService {
 
       return response.results.length > 0;
     } catch (error) {
-      logger.error(`Error querying Notion for duplicate check ("${taskName}"):`, error);
+      logger.error(`Error querying Notion for duplicate check ("${taskName}" - "${category}"):`, error);
       return false;
     }
   }
@@ -189,7 +186,6 @@ export class NotionService {
     const { classCode, assignmentText } = parsed;
 
     try {
-      // Query Notion for pages where Title property "Class" contains the class code (e.g. "SOC 135" matches "SOC 135-B")
       const response = await notion.databases.query({
         database_id: assignmentsDbId,
         filter: {
@@ -205,10 +201,8 @@ export class NotionService {
         return null;
       }
 
-      // Iterate through class assignments to match the "Assignment Name" text property
       for (const page of response.results as any[]) {
         const assignmentNameProp = page.properties['Assignment Name'];
-
         const notionAssignmentName = assignmentNameProp?.rich_text
           ?.map((t: any) => t.plain_text)
           .join('')
@@ -219,14 +213,13 @@ export class NotionService {
         const cleanAssignmentText = assignmentText.toLowerCase();
         const cleanNotionName = notionAssignmentName.toLowerCase();
 
-        // Flexible matching for affixed text (like priority or overdue notes)
         if (
           cleanAssignmentText === cleanNotionName ||
           cleanAssignmentText.includes(cleanNotionName) ||
           cleanNotionName.includes(cleanAssignmentText)
         ) {
           logger.info(
-            `Matched task "${taskName}" to Notion Assignment Page ID: ${page.id} (Class: "${classCode}", Name: "${notionAssignmentName}")`
+            `Matched task "${taskName}" to Notion Assignment Page ID: ${page.id}`
           );
           return page.id;
         }
@@ -242,8 +235,6 @@ export class NotionService {
 
   /**
    * Creates an individual Daily Task in Notion.
-   * Flexibly supports either an ExtractedTask object or individual string arguments.
-   * Returns the created page object so callers can retrieve page.id.
    */
   public static async createDailyTask(
     taskOrName: ExtractedTask | string,
@@ -259,14 +250,12 @@ export class NotionService {
     let counterLinkId: string | null | undefined;
 
     if (typeof taskOrName === 'string') {
-      // Called via individual parameters: (taskName, category, pullDate, assignmentId, counterLinkId)
       taskName = taskOrName;
       category = categoryOrPullDate;
       pullDate = pullDateOrAssignmentId || '';
       assignmentId = assignmentIdOrCounterLinkId;
       counterLinkId = counterLinkIdParam;
     } else {
-      // Called via object signature: (taskObject, pullDate, assignmentId, counterLinkId)
       taskName = taskOrName.taskName;
       category = taskOrName.category;
       pullDate = categoryOrPullDate;
@@ -277,7 +266,6 @@ export class NotionService {
     const dailyTasksDbId = process.env.NOTION_DATABASE_ID || '';
 
     try {
-      // Auto-lookup assignment if not passed explicitly
       if (assignmentId === undefined) {
         const isNotGeneral = category && !category.includes('General');
         const containsColon = taskName.includes(':');
@@ -348,7 +336,6 @@ export class NotionService {
 
   /**
    * Queries Daily Tasks database for completed tasks with a relation.
-   * Returns raw Notion page results so callers can inspect .properties directly.
    */
   public static async getCompletedUnsyncedTasks(): Promise<any[]> {
     const dailyTasksDbId = process.env.NOTION_DATABASE_ID || '';
@@ -392,48 +379,20 @@ export class NotionService {
    */
   public static async updateAssignmentDone(assignmentId: any, completedOn: any): Promise<void> {
     try {
-      // 1. Robustly extract clean Assignment Page ID
       const cleanAssignmentId = NotionService.extractId(assignmentId);
+      if (!cleanAssignmentId) return;
 
-      if (!cleanAssignmentId) {
-        logger.warn(`updateAssignmentDone received an empty or invalid assignment ID. Skipping.`);
-        return;
-      }
-
-      // 2. Robustly extract clean ISO Date string (YYYY-MM-DD)
       const cleanCompletedOn = NotionService.extractIsoDate(completedOn);
+      if (!cleanCompletedOn) return;
 
-      if (!cleanCompletedOn) {
-        logger.warn(`updateAssignmentDone received an invalid date format for assignment (${cleanAssignmentId}). Skipping.`);
-        return;
-      }
-
-      // 3. Retrieve target Notion page
       const assignmentPage = (await notion.pages.retrieve({ page_id: cleanAssignmentId })) as any;
-
-      if (!assignmentPage || !assignmentPage.properties) {
-        logger.warn(`Could not retrieve page properties for Assignment ID: ${cleanAssignmentId}`);
-        return;
-      }
+      if (!assignmentPage || !assignmentPage.properties) return;
 
       const doneProp = assignmentPage.properties['Done'];
-
-      if (!doneProp) {
-        logger.warn(`Page (${cleanAssignmentId}) does not have a 'Done' property. Skipping.`);
-        return;
-      }
-
-      // Verify that 'Done' is a Date property before updating to prevent Notion DB errors
-      if (doneProp.type !== 'date') {
-        logger.warn(
-          `Target page (${cleanAssignmentId}) property 'Done' is of type '${doneProp.type}' (expected 'date'). Skipping update.`
-        );
-        return;
-      }
+      if (!doneProp || doneProp.type !== 'date') return;
 
       const currentDoneDate = doneProp.date?.start;
 
-      // Only update if there isn't already a date in the 'Done' column
       if (!currentDoneDate) {
         await notion.pages.update({
           page_id: cleanAssignmentId,
@@ -446,10 +405,6 @@ export class NotionService {
           },
         });
         logger.info(`Updated Assignment (${cleanAssignmentId}) 'Done' to ${cleanCompletedOn}`);
-      } else {
-        logger.info(
-          `Assignment (${cleanAssignmentId}) already has a 'Done' date (${currentDoneDate}). Skipping update.`
-        );
       }
     } catch (error) {
       logger.error(`Failed to update Assignment in Notion:`, error);
@@ -458,9 +413,7 @@ export class NotionService {
   }
 }
 
-// Standalone function export alias for backwards compatibility
 export const createDailyTasks = async (tasks: ExtractedTask[], pullDate: string) => {
-  // Reset the task counter before adding the new batch
   await NotionService.resetTaskCounter();
 
   for (const task of tasks) {

@@ -30,27 +30,20 @@ export class TaskService {
     logger.info('Processing inbound email message', { messageId });
 
     try {
-      // Ensure local database table is initialized
       await TaskService.ensureTableExists();
 
-      // 1. Parse email into an array of tasks using Gemini
       const tasks: ExtractedTask[] = await parseTaskFromEmail(emailBody);
-
       logger.info(`Extracted ${tasks.length} task(s) from email.`);
 
-      // Get current date string in YYYY-MM-DD format for Notion 'Pull Date'
       const pullDate = new Date().toISOString().split('T')[0];
 
-      // 2. Iterate through extracted tasks, create in Notion, and log to Supabase
       for (const task of tasks) {
-        // Skip duplicate task creation if it already exists in Notion for today
-        const exists = await NotionService.taskExists(task.taskName, pullDate);
+        const exists = await NotionService.taskExists(task.taskName, task.category, pullDate);
         if (exists) {
-          logger.info(`Task "${task.taskName}" already exists in Notion for ${pullDate}. Skipping creation.`);
+          logger.info(`Task "${task.taskName}" [${task.category}] already exists for ${pullDate}. Skipping creation.`);
           continue;
         }
 
-        // Look up if task matching the assignment name exists in Notion
         const assignmentId = await NotionService.findAssignment(task.taskName);
 
         const notionResponse: any = await NotionService.createDailyTask(
@@ -62,7 +55,6 @@ export class TaskService {
 
         const notionId = notionResponse?.id || null;
 
-        // Record task in Supabase database; silently ignore if unique constraint fires
         await pool.query(
           `INSERT INTO processed_tasks (notion_id, task_name, category, pull_date) 
            VALUES ($1, $2, $3, $4) 
@@ -73,7 +65,6 @@ export class TaskService {
 
       logger.info('Successfully processed all tasks into Notion and database', { messageId });
 
-      // 3. Immediately trigger Google Calendar sync for any timed events
       await SyncService.syncCalendarEvents();
     } catch (error) {
       logger.error('Failed to process tasks from email', { messageId, error });
