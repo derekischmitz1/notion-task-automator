@@ -12,6 +12,7 @@ export class TaskService {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS processed_tasks (
         id SERIAL PRIMARY KEY,
+        notion_id VARCHAR(255),
         task_name VARCHAR(255) NOT NULL,
         category VARCHAR(255) NOT NULL,
         processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -44,17 +45,19 @@ export class TaskService {
         // Look up if task matching the assignment name exists in Notion
         const assignmentId = await NotionService.findAssignment(task.taskName);
 
-        await NotionService.createDailyTask(
+        const notionResponse: any = await NotionService.createDailyTask(
           task.taskName,
           task.category,
           pullDate,
           assignmentId
         );
 
+        const notionId = notionResponse?.id || null;
+
         // Record task in Supabase database for calendar processing tracking
         await pool.query(
-          'INSERT INTO processed_tasks (task_name, category) VALUES ($1, $2)',
-          [task.taskName, task.category]
+          'INSERT INTO processed_tasks (notion_id, task_name, category) VALUES ($1, $2, $3)',
+          [notionId, task.taskName, task.category]
         );
       }
 
