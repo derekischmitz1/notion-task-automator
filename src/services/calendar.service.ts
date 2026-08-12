@@ -1,96 +1,145 @@
 import { google } from 'googleapis';
-import { pool } from '../config/db';
-// IMPORTANT: Update this path to point to your actual Google OAuth2 client initialization
-import { oauth2Client } from '../config/google'; 
+import { oauth2Client } from '../config/google';
+import { logger } from '../utils/logger';
 
 const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
 /**
- * Checks all Google Calendars for conflicts and inserts a 10-minute event 
- * into the target calendar if the timeslot is completely free.
+ * Parses an ICS date string (e.g., "20260812T150000Z" or "20260812T150000") into a JavaScript Date.
+ */
+function parseIcsDate(icsDateStr: string): Date | null {
+  if (!icsDateStr) return null;
+  const cleanStr = icsDateStr.replace(/[^0-9T]/g, '');
+  const match = cleanStr.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/);
+  if (!match) return null;
+
+  const [, year, month, day, hour, min, sec] = match;
+  return new Date(Date.UTC(+year, +month - 1, +day, +hour, +min, +sec));
+}
+
+/**
+ * Fetches an Outlook ICS feed and checks if any event overlaps with the given time window.
+ */
+async function checkOutlookConflict(
+  icsUrl: string,
+  targetStart: Date,
+  targetEnd: Date
+): Promise<boolean> {
+  try {
+    const response = await fetch(icsUrl);
+    if (!response.ok) {
+      logger.warn(`Failed to fetch Outlook ICS feed (${icsUrl}): HTTP ${response.status}`);
+      return false;
+    }
+
+    const icsData = await response.text();
+    const events = icsData.split('BEGIN:VEVENT');
+
+    for (const eventBlock of events.slice(1)) {
+      const startMatch = eventBlock.match(/DTSTART.*?:(\d{8}T\d{6}Z?)/);
+      const endMatch = eventBlock.match(/DTEND.*?:(\d{8}T\d{6}Z?)/);
+
+      if (!startMatch || !endMatch) continue;
+
+      const eventStart = parseIcsDate(startMatch[1]);
+      const eventEnd = parseIcsDate(endMatch[1]);
+
+      if (!eventStart || !eventEnd) continue;
+
+      // Overlap check: eventStart < targetEnd AND eventEnd > targetStart
+      if (eventStart < targetEnd && eventEnd > targetStart) {
+        logger.info(`Outlook conflict detected on feed (${icsUrl}) between ${eventStart.toISOString()} and ${eventEnd.toISOString()}`);
+        return true;
+      }
+    }
+  } catch (error) {
+    logger.error(`Error checking Outlook ICS feed (${icsUrl}) for conflicts`, { error });
+  }
+
+  return false;
+}
+
+/**
+ * Evaluates conflict status across primary GCal, Tentative GCal, extra GCals, 
+ * and multiple Outlook ICS feeds before creating a 10-minute block on the target calendar.
  */
 export async function createEventIfNoConflicts(
-  taskName: string, 
-  startTimeIso: string, 
+  title: string,
+  startTimeIso: string,
   taskId: string
 ): Promise<string | null> {
+  const targetCalendarId =
+    process.env.GOOGLE_CALENDAR_ID ||
+    'c_8563a246fae7864278a6ed9d4af0100e8de9d845548ef8832cc1aaaf239c8612@group.calendar.google.com';
+
+  const startDate = new Date(startTimeIso);
+  const endDate = new Date(startDate.getTime() + 10 * 60 * 1000);
+  const endTimeIso = endDate.toISOString();
+
   try {
-    const startTime = new Date(startTimeIso);
-    // Define the 10-minute time block
-    const endTime = new Date(startTime.getTime() + 10 * 60 * 1000); 
+    // 1. Build list of Google Calendar IDs to check
+    const googleCalendarIds = ['primary', targetCalendarId];
 
-    // 1. Fetch all calendars the user has access to
-    const calendarListRes = await calendar.calendarList.list();
-    const calendars = calendarListRes.data.items || [];
-    
-    let targetCalendarId = 'primary'; // Fallback if Tentative/Travel isn't found
-    const freeBusyItems: { id: string }[] = [];
+    if (process.env.EXTERNAL_GCAL_IDS) {
+      const extraIds = process.env.EXTERNAL_GCAL_IDS.split(',').map((id) => id.trim()).filter(Boolean);
+      googleCalendarIds.push(...extraIds);
+    }
 
-    calendars.forEach(cal => {
-      if (cal.id) {
-        freeBusyItems.push({ id: cal.id });
-        // Identify the target calendar by its exact name
-        if (cal.summary === 'Tentative/Travel') {
-          targetCalendarId = cal.id;
-        }
-      }
-    });
-
-    // 2. Query Free/Busy status across ALL calendars at once
+    // Query Google Calendar Free/Busy for all Google targets
     const freeBusyRes = await calendar.freebusy.query({
       requestBody: {
-        timeMin: startTime.toISOString(),
-        timeMax: endTime.toISOString(),
-        items: freeBusyItems,
-      }
+        timeMin: startTimeIso,
+        timeMax: endTimeIso,
+        items: googleCalendarIds.map((id) => ({ id })),
+      },
     });
 
-    const calendarsBusy = freeBusyRes.data.calendars || {};
+    const calendars = freeBusyRes.data.calendars || {};
     let hasConflict = false;
 
-    // 3. Evaluate the Free/Busy response for any overlapping events
-    for (const calId in calendarsBusy) {
-      if (calendarsBusy[calId].busy && calendarsBusy[calId].busy.length > 0) {
+    for (const calId in calendars) {
+      if (calendars[calId].busy && calendars[calId].busy.length > 0) {
+        logger.info(`Google Calendar conflict detected on calendar (${calId}) for task "${title}".`);
         hasConflict = true;
-        break; // Exit loop immediately upon finding the first conflict
+        break;
+      }
+    }
+
+    // 2. Check multiple Outlook ICS feeds if configured
+    const outlookEnv = process.env.OUTLOOK_ICS_URLS || process.env.OUTLOOK_ICS_URL || '';
+    const outlookUrls = outlookEnv.split(',').map((url) => url.trim()).filter(Boolean);
+
+    for (const url of outlookUrls) {
+      if (hasConflict) break;
+      const outlookConflict = await checkOutlookConflict(url, startDate, endDate);
+      if (outlookConflict) {
+        hasConflict = true;
+        break;
       }
     }
 
     if (hasConflict) {
-      console.log(`[Calendar Service] Conflict found for '${taskName}' at ${startTimeIso}. Skipping event creation.`);
+      logger.info(`Skipping task creation for "${title}" due to detected schedule conflict.`);
       return null;
     }
 
-    // 4. Insert the event because the timeslot is free
+    // 3. Insert event explicitly into the target calendar
     const eventRes = await calendar.events.insert({
       calendarId: targetCalendarId,
       requestBody: {
-        summary: taskName,
-        start: {
-          dateTime: startTime.toISOString(),
-        },
-        end: {
-          dateTime: endTime.toISOString(),
-        },
-      }
+        summary: title,
+        start: { dateTime: startTimeIso },
+        end: { dateTime: endTimeIso },
+      },
     });
 
-    const gcalEventId = eventRes.data.id || null;
+    logger.info(
+      `Successfully created event "${title}" on calendar (${targetCalendarId}). Event ID: ${eventRes.data.id}`
+    );
 
-    // 5. Save the Event ID to the database to prevent duplicates
-    if (gcalEventId) {
-      await pool.query(
-        'UPDATE processed_tasks SET gcal_event_id = $1 WHERE id = $2',
-        [gcalEventId, taskId]
-      );
-      console.log(`[Calendar Service] Successfully added 10-min block for '${taskName}' to ${targetCalendarId}.`);
-    }
-
-    return gcalEventId;
-
+    return eventRes.data.id || null;
   } catch (error) {
-    console.error('[Calendar Service] Error processing calendar event:', error);
-    // We don't throw the error so that a Google Calendar failure doesn't crash the Notion task creation
-    return null; 
+    logger.error(`Error checking calendar conflicts or creating event for "${title}"`, { error });
+    return null;
   }
 }
