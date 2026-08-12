@@ -96,6 +96,41 @@ export class NotionService {
   }
 
   /**
+   * Checks if a task with the exact same task name and pull date already exists in Notion.
+   */
+  public static async taskExists(taskName: string, pullDate: string): Promise<boolean> {
+    const databaseId = process.env.NOTION_DATABASE_ID;
+    if (!databaseId) return false;
+
+    try {
+      const response = await notion.databases.query({
+        database_id: databaseId,
+        filter: {
+          and: [
+            {
+              property: 'Task',
+              title: {
+                equals: taskName,
+              },
+            },
+            {
+              property: 'Pull Date',
+              date: {
+                equals: pullDate,
+              },
+            },
+          ],
+        },
+      });
+
+      return response.results.length > 0;
+    } catch (error) {
+      logger.error(`Error querying Notion for duplicate check ("${taskName}"):`, error);
+      return false;
+    }
+  }
+
+  /**
    * Resets the Global Task Counter to 0 inside the System Settings database.
    */
   public static async resetTaskCounter(): Promise<void> {
@@ -208,6 +243,7 @@ export class NotionService {
   /**
    * Creates an individual Daily Task in Notion.
    * Flexibly supports either an ExtractedTask object or individual string arguments.
+   * Returns the created page object so callers can retrieve page.id.
    */
   public static async createDailyTask(
     taskOrName: ExtractedTask | string,
@@ -215,7 +251,7 @@ export class NotionService {
     pullDateOrAssignmentId?: string | null,
     assignmentIdOrCounterLinkId?: string | null,
     counterLinkIdParam?: string | null
-  ): Promise<void> {
+  ): Promise<any> {
     let taskName: string;
     let category: string;
     let pullDate: string;
@@ -297,14 +333,16 @@ export class NotionService {
         };
       }
 
-      await notion.pages.create({
+      const response = await notion.pages.create({
         parent: { database_id: dailyTasksDbId },
         properties,
       });
 
       logger.info(`Successfully created task in Notion: "${taskName}" [Category: ${category}]`);
+      return response;
     } catch (error) {
       logger.error(`Failed to create task "${taskName}" in Notion:`, error);
+      throw error;
     }
   }
 

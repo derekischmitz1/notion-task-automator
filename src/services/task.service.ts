@@ -42,6 +42,13 @@ export class TaskService {
 
       // 2. Iterate through extracted tasks, create in Notion, and log to Supabase
       for (const task of tasks) {
+        // Skip duplicate task creation if it already exists in Notion for today
+        const exists = await NotionService.taskExists(task.taskName, pullDate);
+        if (exists) {
+          logger.info(`Task "${task.taskName}" already exists for ${pullDate}. Skipping creation.`);
+          continue;
+        }
+
         // Look up if task matching the assignment name exists in Notion
         const assignmentId = await NotionService.findAssignment(task.taskName);
 
