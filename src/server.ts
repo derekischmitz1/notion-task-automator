@@ -17,11 +17,11 @@ app.get('/health', (req, res) => {
 // 2. Inbound Gmail / PubSub Webhook Endpoint
 app.post('/api/webhooks/gmail', handleInboundEmail);
 
-// 3. Manual Sync Endpoint
+// 3. Manual Sync Endpoint (runs full sync including Notion time updates & calendar sync)
 app.post('/api/sync', async (req, res) => {
   try {
-    await SyncService.syncAssignments();
-    res.status(200).json({ message: 'Sync completed successfully' });
+    await SyncService.runFullSync();
+    res.status(200).json({ message: 'Full sync completed successfully' });
   } catch (error) {
     logger.error('Error during manual sync trigger', { error });
     res.status(500).json({ error: 'Sync failed' });
@@ -41,12 +41,12 @@ app.listen(PORT, async () => {
     logger.warn('GMAIL_PUBSUB_TOPIC environment variable is missing.');
   }
 
-  // Background scheduler: runs every 60 minutes
-  BackgroundScheduler.start(60, async () => {
-    logger.info('Executing scheduled background sync...');
-    await SyncService.syncAssignments();
+  // Background scheduler: runs full sync every 5 minutes
+  BackgroundScheduler.start(5, async () => {
+    logger.info('Executing 5-minute scheduled background sync...');
+    await SyncService.runFullSync();
 
-    // Renew Gmail watch registration periodically so it doesn't expire after 7 days
+    // Renew Gmail watch registration periodically so it doesn't expire
     if (pubSubTopic) {
       await setupGmailWatch(pubSubTopic);
     }
