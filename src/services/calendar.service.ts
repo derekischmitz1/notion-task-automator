@@ -143,3 +143,81 @@ export async function createEventIfNoConflicts(
     return null;
   }
 }
+/**
+ * Updates an existing Google Calendar event's start/end time and title after verifying freebusy.
+ */
+export async function updateEventTime(
+  eventId: string,
+  title: string,
+  startTimeIso: string
+): Promise<boolean> {
+  const targetCalendarId =
+    process.env.GOOGLE_CALENDAR_ID ||
+    'c_8563a246fae7864278a6ed9d4af0100e8de9d845548ef8832cc1aaaf239c8612@group.calendar.google.com';
+
+  const startDate = new Date(startTimeIso);
+  const endDate = new Date(startDate.getTime() + 10 * 60 * 1000);
+  const endTimeIso = endDate.toISOString();
+
+  try {
+    // 1. Check conflicts across calendars for the NEW time slot
+    const googleCalendarIds = ['primary', targetCalendarId];
+    if (process.env.EXTERNAL_GCAL_IDS) {
+      const extraIds = process.env.EXTERNAL_GCAL_IDS.split(',').map((id) => id.trim()).filter(Boolean);
+      googleCalendarIds.push(...extraIds);
+    }
+
+    const freeBusyRes = await calendar.freebusy.query({
+      requestBody: {
+        timeMin: startTimeIso,
+        timeMax: endTimeIso,
+        items: googleCalendarIds.map((id) => ({ id })),
+      },
+    });
+
+    const calendars = freeBusyRes.data.calendars || {};
+    let hasConflict = false;
+
+    for (const calId in calendars) {
+      if (calendars[calId].busy && calendars[calId].busy.length > 0) {
+        logger.warn(`Google Calendar conflict detected on calendar (${calId}) for update "${title}".`);
+        hasConflict = true;
+        break;
+      }
+    }
+
+    // Check Outlook ICS feeds
+    const outlookEnv = process.env.OUTLOOK_ICS_URLS || process.env.OUTLOOK_ICS_URL || '';
+    const outlookUrls = outlookEnv.split(',').map((url) => url.trim()).filter(Boolean);
+
+    for (const url of outlookUrls) {
+      if (hasConflict) break;
+      if (await checkOutlookConflict(url, startDate, endDate)) {
+        hasConflict = true;
+        break;
+      }
+    }
+
+    if (hasConflict) {
+      logger.warn(`Cannot move event "${title}" to ${startTimeIso} due to a calendar conflict.`);
+      return false;
+    }
+
+    // 2. Patch existing event on Google Calendar
+    await calendar.events.patch({
+      calendarId: targetCalendarId,
+      eventId: eventId,
+      requestBody: {
+        summary: title,
+        start: { dateTime: startTimeIso },
+        end: { dateTime: endTimeIso },
+      },
+    });
+
+    logger.info(`Successfully updated GCal event (${eventId}) to "${title}" at ${startTimeIso}`);
+    return true;
+  } catch (error) {
+    logger.error(`Failed to update GCal event (${eventId})`, { error });
+    return false;
+  }
+}

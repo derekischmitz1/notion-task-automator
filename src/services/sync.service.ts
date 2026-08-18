@@ -1,6 +1,6 @@
 import { pool } from '../config/db';
 import { NotionService } from './notion.service';
-import { createEventIfNoConflicts } from './calendar.service';
+import { createEventIfNoConflicts, updateEventTime } from './calendar.service';
 import { logger } from '../utils/logger';
 
 /**
@@ -145,10 +145,65 @@ export class SyncService {
   }
 
   /**
+   * Scans Notion for updated task names/times and syncs edits to Google Calendar.
+   */
+  static async syncNotionTaskUpdates(): Promise<void> {
+    logger.info('Checking Notion for task time/title updates...');
+
+    try {
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+      const notionTasks = await NotionService.getTodayTimedTasks(todayStr);
+
+      for (const notionTask of notionTasks) {
+        // Find matching task in database by Notion page ID
+        const { rows } = await pool.query(
+          `SELECT id, task_name, gcal_event_id FROM processed_tasks 
+           WHERE notion_id = $1 AND gcal_event_id IS NOT NULL 
+           AND gcal_event_id NOT LIKE 'SKIPPED_%'`,
+          [notionTask.pageId]
+        );
+
+        if (rows.length === 0) continue;
+
+        const dbTask = rows[0];
+
+        // Detect if user modified the task title/time in Notion
+        if (notionTask.taskName !== dbTask.task_name) {
+          logger.info(`Detected task edit in Notion: "${dbTask.task_name}" -> "${notionTask.taskName}"`);
+
+          const timeData = parseTimeToIso(notionTask.taskName);
+          if (!timeData) {
+            logger.warn(`Updated task name "${notionTask.taskName}" could not be parsed for time.`);
+            continue;
+          }
+
+          const success = await updateEventTime(
+            dbTask.gcal_event_id,
+            timeData.cleanTitle,
+            timeData.startTimeIso
+          );
+
+          if (success) {
+            // Update PostgreSQL so we don't process this edit repeatedly
+            await pool.query(
+              'UPDATE processed_tasks SET task_name = $1 WHERE id = $2',
+              [notionTask.taskName, dbTask.id]
+            );
+            logger.info(`Updated database record ID ${dbTask.id} to title "${notionTask.taskName}"`);
+          }
+        }
+      }
+    } catch (error) {
+      logger.error('Failed during Notion task updates sync', { error });
+    }
+  }
+
+  /**
    * Master sync runner.
    */
   static async runFullSync(): Promise<void> {
     await SyncService.syncAssignments();
     await SyncService.syncCalendarEvents();
+    await SyncService.syncNotionTaskUpdates();
   }
 }

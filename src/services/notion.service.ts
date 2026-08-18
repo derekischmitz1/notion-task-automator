@@ -411,6 +411,49 @@ export class NotionService {
       throw error;
     }
   }
+
+  /**
+   * Fetches today's timed tasks directly from Notion to check for user updates.
+   */
+  public static async getTodayTimedTasks(pullDate: string): Promise<Array<{ pageId: string; taskName: string; category: string }>> {
+    const databaseId = process.env.NOTION_DATABASE_ID;
+    if (!databaseId) return [];
+
+    try {
+      const response = await notion.databases.query({
+        database_id: databaseId,
+        filter: {
+          and: [
+            {
+              property: 'Pull Date',
+              date: {
+                equals: pullDate,
+              },
+            },
+            {
+              property: 'Category',
+              rich_text: {
+                contains: '2. Timed Events',
+              },
+            },
+          ],
+        },
+      });
+
+      return response.results.map((page: any) => {
+        const taskTitle = page.properties['Task']?.title?.[0]?.plain_text || '';
+        const category = page.properties['Category']?.rich_text?.[0]?.plain_text || '';
+        return {
+          pageId: page.id,
+          taskName: taskTitle,
+          category,
+        };
+      });
+    } catch (error) {
+      logger.error('Error fetching today timed tasks from Notion:', error);
+      return [];
+    }
+  }
 }
 
 export const createDailyTasks = async (tasks: ExtractedTask[], pullDate: string) => {
