@@ -69,19 +69,28 @@ export class NotionService {
   }
 
   /**
-   * Extracts class code and assignment name from task strings.
+   * Extracts class code and assignment name from task strings (handles course codes like SOC 408-2C or CHEM 101-L1).
    */
   private static parseAcademicTaskName(taskName: string): { classCode: string; assignmentText: string } | null {
-    const cleanName = taskName.replace(/^[\d.\s]+/, '').trim();
+    // Strip time/category prefixes like "2A.0930: ", "2.0900: ", "3.9. ", etc.
+    const cleanName = taskName
+      .replace(/^(?:\d+A?\.)?\d{3,4}:\s*/i, '')
+      .replace(/^[\d.\s]+/, '')
+      .trim();
+
     const firstColonIndex = cleanName.indexOf(':');
     if (firstColonIndex === -1) return null;
 
-    const classCode = cleanName.substring(0, firstColonIndex).trim();
+    const rawClassCode = cleanName.substring(0, firstColonIndex).trim();
     const assignmentText = cleanName.substring(firstColonIndex + 1).trim();
 
-    if (!/^[A-Z]{2,4}\s+\d{3}/i.test(classCode)) {
+    if (!/^[A-Z]{2,4}\s+\d{3}/i.test(rawClassCode)) {
       return null;
     }
+
+    // Extract core class code (e.g., "SOC 408" from "SOC 408-2C") for database searching
+    const baseMatch = rawClassCode.match(/^([A-Z]{2,4}\s+\d{3})/i);
+    const classCode = baseMatch ? baseMatch[1] : rawClassCode;
 
     return { classCode, assignmentText };
   }
@@ -433,7 +442,7 @@ export class NotionService {
             {
               property: 'Category',
               rich_text: {
-                contains: '2. Timed Events',
+                contains: 'Timed',
               },
             },
           ],

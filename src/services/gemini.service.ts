@@ -39,14 +39,18 @@ export async function parseTaskFromEmail(emailBody: string, maxRetriesPerModel =
    - ALWAYS include a task named "1.1. GET DA UPPY" under the category "1. General", even if it is not present in the email text.
    - ALL tasks assigned to "1. General" MUST be sequentially numbered in their "taskName" AND prefixed with the category number (e.g., "1.1. GET DA UPPY", "1.2. Put on watch and ring", "1.3. Fill up Mtn Dew").
 
-3. **Timed Task Identification & Formatting**:
-   - A task is ONLY a timed task if ITS OWN LINE explicitly contains a time prefix (e.g., "7:45a SHOWER", "9a: SHOWER", "10:30a: Brekkie and meds", "2p: UAB Graduate...").
-   - Convert the time into 24-hour HHMM format followed by a colon and the task name, and prefix it with the category number ("2.") WITH NO SPACE between the period and the time:
-     - "9a: SHOWER" -> "2.0900: SHOWER"
-     - "10:30a: Brekkie and meds" -> "2.1030: Brekkie and meds"
-     - "3:00p: Second ADHD med" -> "2.1500: Second ADHD med"
-     - "2p: UAB Graduate..." -> "2.1400: UAB Graduate..."
-   - ALL timed tasks MUST be categorized under "2. Timed Events".
+3. **Timed Task & Timed Academic Event Identification & Formatting**:
+   - A task is ONLY a timed task if ITS OWN LINE explicitly contains a time prefix (e.g., "7:45a SHOWER", "9:30a: SOC 408-2C: Lecture 3", "1:00p: CHEM 101-L1: Lab 5", "10:30a: Brekkie and meds").
+   - Convert the time into 24-hour HHMM format followed by a colon and the task name:
+     - If it is a lecture, lab, or course-specific academic event (e.g., "9:30a: SOC 408-2C: Lecture 3", "1:00p: CHEM 101-L1: Lab 5"), prefix it with "2A." WITH NO SPACE between the period and time:
+       - "9:30a: SOC 408-2C: Lecture 3" -> "2A.0930: SOC 408-2C: Lecture 3"
+       - "1:00p: CHEM 101-L1: Lab 5" -> "2A.1300: CHEM 101-L1: Lab 5"
+     - Otherwise, for standard non-academic timed tasks, prefix it with "2." WITH NO SPACE between the period and time:
+       - "9a: SHOWER" -> "2.0900: SHOWER"
+       - "10:30a: Brekkie and meds" -> "2.1030: Brekkie and meds"
+       - "3:00p: Second ADHD med" -> "2.1500: Second ADHD med"
+   - ALL timed academic events MUST be categorized under "2A. Timed Academic Events".
+   - ALL standard timed tasks MUST be categorized under "2. Timed Events".
 
 4. **Packing & Sub-List Aggregation Rule (CRITICAL)**:
    - When a line specifies packing a bag or container (e.g., "Pack rucksack:", "Pack backpack:", "Pack bag:") followed by bullet points, dashes, or indented items, DO NOT create separate tasks for each item.
@@ -59,13 +63,14 @@ export async function parseTaskFromEmail(emailBody: string, maxRetriesPerModel =
    - Example output taskName: "1.2. Pack rucksack: File folders, Padfolio, Laptop"
 
 5. **Line-by-Line Isolation Rule**:
-   - Do NOT inherit the "2. Timed Events" category for subsequent lines just because they follow a timed line.
+   - Do NOT inherit timed categories for subsequent lines just because they follow a timed line.
    - Independent non-timed lines (e.g., "Brush teeth", "Put on deodorant") MUST remain standalone tasks assigned to "1. General" with sequential numbering (e.g., "1.4. Brush teeth").
    - Do not split list sub-items into individual tasks if they belong to a packing list rule (Rule 4).
 
 6. **Category Assignment Rules**:
    - "1. General": Assigned to general, non-timed routine tasks.
-   - "2. Timed Events": Assigned ONLY to tasks that start with an explicit timestamp.
+   - "2. Timed Events": Assigned to standard non-academic tasks that start with an explicit timestamp.
+   - "2A. Timed Academic Events": Assigned to timed lectures, labs, or course-specific academic events.
    - Section Headers: Headers in the email (e.g., "Academic Tier 1:", "Academic Tier 2:") define new categories. Prefix these headers with sequential numbers matching their order of appearance (e.g., "Academic Tier 1:" becomes "3. Academic Tier 1", "Academic Tier 2:" becomes "4. Academic Tier 2").
 
 7. **Preserve Priority Numbers, Parentheticals, and Prefix with Category Number**:
@@ -74,7 +79,7 @@ export async function parseTaskFromEmail(emailBody: string, maxRetriesPerModel =
    - CRITICAL: PRESERVE all parenthetical notes and details in brackets exactly as written in the email (e.g. "(ADHD & Qulipta)" or "[Draft]"). Do NOT delete or trim parenthetical text.
 
 8. **Automatic Category Placeholders ("Pending")**:
-   - For EVERY category generated in the output ("1. General", "2. Timed Events", "3. Academic Tier 1", etc.), ensure EXACTLY ONE placeholder task named "Pending" exists in that category.
+   - For EVERY category generated in the output ("1. General", "2. Timed Events", "2A. Timed Academic Events", "3. Academic Tier 1", etc.), ensure EXACTLY ONE placeholder task named "Pending" exists in that category.
    - DO NOT prefix the "Pending" task with a category number (it must be exactly "Pending").
 
 ---

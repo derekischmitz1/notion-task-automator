@@ -4,10 +4,10 @@ import { createEventIfNoConflicts, updateEventTime } from './calendar.service';
 import { logger } from '../utils/logger';
 
 /**
- * Parses a timed task string like "2.0900: SHOWER" or "2.900: SHOWER" into a clean title and today's ISO start time.
+ * Parses a timed task string like "2.0900: SHOWER" or "2A.0930: SOC 408-2C: Lecture 3" into a clean title and today's ISO start time.
  */
 function parseTimeToIso(taskName: string): { cleanTitle: string; startTimeIso: string } | null {
-  const match = taskName.match(/^2\.(\d{1,2})(\d{2}):\s*(.*)$/);
+  const match = taskName.match(/^2A?\.(\d{1,2})(\d{2}):\s*(.*)$/i);
   if (!match) return null;
 
   const [, hoursStr, minutesStr, cleanTitle] = match;
@@ -50,7 +50,7 @@ export class SyncService {
     try {
       const { rows: pendingTasks } = await pool.query(
         `SELECT id, task_name, category FROM processed_tasks 
-         WHERE (category = '2. Timed Events' OR task_name LIKE '2.%') 
+         WHERE (category IN ('2. Timed Events', '2A. Timed Academic Events') OR task_name LIKE '2.%' OR task_name LIKE '2A.%') 
          AND gcal_event_id IS NULL`
       );
 
