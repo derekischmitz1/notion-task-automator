@@ -51,6 +51,7 @@ export async function parseTaskFromEmail(emailBody: string, maxRetriesPerModel =
        - "3:00p: Second ADHD med" -> "2.1500: Second ADHD med"
    - ALL timed academic events MUST be categorized under "2A. Timed Academic Events".
    - ALL standard timed tasks MUST be categorized under "2. Timed Events".
+   - **CONDITIONAL RULE**: If NO timed academic events exist in the email text, DO NOT create or output the "2A. Timed Academic Events" category.
 
 4. **Packing & Sub-List Aggregation Rule (CRITICAL)**:
    - When a line specifies packing a bag or container (e.g., "Pack rucksack:", "Pack backpack:", "Pack bag:") followed by bullet points, dashes, or indented items, DO NOT create separate tasks for each item.
@@ -70,7 +71,7 @@ export async function parseTaskFromEmail(emailBody: string, maxRetriesPerModel =
 6. **Category Assignment Rules**:
    - "1. General": Assigned to general, non-timed routine tasks.
    - "2. Timed Events": Assigned to standard non-academic tasks that start with an explicit timestamp.
-   - "2A. Timed Academic Events": Assigned to timed lectures, labs, or course-specific academic events.
+   - "2A. Timed Academic Events": Assigned ONLY IF timed lectures, labs, or course-specific academic events exist in the input text. DO NOT generate this category if no such items exist.
    - Section Headers: Headers in the email (e.g., "Academic Tier 1:", "Academic Tier 2:") define new categories. Prefix these headers with sequential numbers matching their order of appearance (e.g., "Academic Tier 1:" becomes "3. Academic Tier 1", "Academic Tier 2:" becomes "4. Academic Tier 2").
 
 7. **Preserve Priority Numbers, Parentheticals, and Prefix with Category Number**:
@@ -79,7 +80,8 @@ export async function parseTaskFromEmail(emailBody: string, maxRetriesPerModel =
    - CRITICAL: PRESERVE all parenthetical notes and details in brackets exactly as written in the email (e.g. "(ADHD & Qulipta)" or "[Draft]"). Do NOT delete or trim parenthetical text.
 
 8. **Automatic Category Placeholders ("Pending")**:
-   - For EVERY category generated in the output ("1. General", "2. Timed Events", "2A. Timed Academic Events", "3. Academic Tier 1", etc.), ensure EXACTLY ONE placeholder task named "Pending" exists in that category.
+   - For EVERY category generated in the output array, ensure EXACTLY ONE placeholder task named "Pending" exists in that category.
+   - If "2A. Timed Academic Events" is NOT created due to lack of items, DO NOT create a "Pending" task for 2A.
    - DO NOT prefix the "Pending" task with a category number (it must be exactly "Pending").
 
 ---
