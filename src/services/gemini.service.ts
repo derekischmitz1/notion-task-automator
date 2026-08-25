@@ -54,14 +54,14 @@ export async function parseTaskFromEmail(emailBody: string, maxRetriesPerModel =
    - **CONDITIONAL RULE**: If NO timed academic events exist in the email text, DO NOT create or output the "2A. Timed Academic Events" category.
 
 4. **Packing & Sub-List Aggregation Rule (CRITICAL)**:
-   - When a line specifies packing a bag or container (e.g., "Pack rucksack:", "Pack backpack:", "Pack bag:") followed by bullet points, dashes, or indented items, DO NOT create separate tasks for each item.
+   - When a line specifies packing any container or item (e.g., "Pack cooler:", "Pack rucksack:", "Pack backpack:", "Pack bag:", "Pack box:") followed by bullet points, dashes, or indented items, DO NOT create separate tasks for each item.
    - Collapse the header and all sub-items into ONE SINGLE TASK line using comma separation.
    - Example input:
-     Pack rucksack:
-     - File folders
-     - Padfolio
-     - Laptop
-   - Example output taskName: "1.2. Pack rucksack: File folders, Padfolio, Laptop"
+     Pack cooler:
+     - Ice pack
+     - Mtn Dew
+     - Sandwich
+   - Example output taskName: "1.2. Pack cooler: Ice pack, Mtn Dew, Sandwich"
 
 5. **Line-by-Line Isolation Rule**:
    - Do NOT inherit timed categories for subsequent lines just because they follow a timed line.
