@@ -23,8 +23,8 @@ export class NotionService {
   }
 
   /**
-   * Helper to extract a valid ISO Date string (YYYY-MM-DD) from strings or objects.
-   * Hardened to explicitly handle array-based Notion Rollups.
+   * Helper to extract a valid ISO Date string (YYYY-MM-DD) from strings, Date objects,
+   * or nested Notion Rollup objects/arrays.
    */
   public static extractIsoDate(input: any): string | null {
     if (!input) return null;
@@ -40,8 +40,9 @@ export class NotionService {
         dateStr = input.start;
       } else if (input.date && input.date.start) {
         dateStr = input.date.start;
+      } else if (input.type === 'date' && input.date?.start) {
+        dateStr = input.date.start;
       } else if (input.rollup) {
-        // Rollups of dates usually return as arrays in Notion's API
         if (input.rollup.date && input.rollup.date.start) {
           dateStr = input.rollup.date.start;
         } else if (input.rollup.array && Array.isArray(input.rollup.array) && input.rollup.array.length > 0) {
@@ -78,7 +79,6 @@ export class NotionService {
    * Extracts class code and assignment name from task strings (handles course codes like SOC 408-2C or CHEM 101-L1).
    */
   private static parseAcademicTaskName(taskName: string): { classCode: string; assignmentText: string } | null {
-    // Strip time/category prefixes like "2A.0930: ", "2.0900: ", "3.9. ", etc.
     const cleanName = taskName
       .replace(/^(?:\d+A?\.)?\d{3,4}:\s*/i, '')
       .replace(/^[\d.\s]+/, '')
@@ -94,7 +94,6 @@ export class NotionService {
       return null;
     }
 
-    // Extract core class code (e.g., "SOC 408" from "SOC 408-2C") for database searching
     const baseMatch = rawClassCode.match(/^([A-Z]{2,4}\s+\d{3})/i);
     const classCode = baseMatch ? baseMatch[1] : rawClassCode;
 

@@ -96,23 +96,33 @@ export class SyncService {
   }
 
   /**
-   * Syncs dates from the "Completed On (Daily Tasks)" Rollup into the native "Done" Date property in Assignments.
+   * Syncs dates from the Rollup column into the native "Done" Date property in Assignments.
+   * Utilizes dynamic key searching and verbose logging to prevent property mismatch issues.
    */
   static async syncAssignments(): Promise<void> {
     logger.info('Starting assignment completion sync from Rollup...');
 
     try {
-      // Pulling directly from Notion DB instead of pg sync_history wrapper to avoid false skipping
       const uncompletedAssignments = await NotionService.getAssignmentsWithEmptyDone();
+      logger.info(`Found ${uncompletedAssignments.length} assignment(s) with empty 'Done' field.`);
 
       for (const page of uncompletedAssignments) {
-        // Extract date directly from the 'Completed On (Daily Tasks)' Rollup property
-        const rollupProp = page.properties['Completed On (Daily Tasks)'];
+        const propEntries = Object.entries(page.properties);
+        const rollupEntry = propEntries.find(([key]) => key.toLowerCase().includes('completed on'));
+
+        if (!rollupEntry) {
+          logger.warn(`Assignment (${page.id}) missing 'Completed On' rollup column. Available props: ${Object.keys(page.properties).join(', ')}`);
+          continue;
+        }
+
+        const [propName, rollupProp] = rollupEntry;
         const completedDate = NotionService.extractIsoDate(rollupProp);
 
         if (completedDate) {
           await NotionService.setAssignmentDoneDate(page.id, completedDate);
-          logger.info(`Updated Assignment (${page.id}) 'Done' date to ${completedDate}`);
+          logger.info(`Successfully updated Assignment (${page.id}) 'Done' date to ${completedDate} using column '${propName}'`);
+        } else {
+          logger.info(`Assignment (${page.id}) found column '${propName}', but extracted date was null. Raw property payload: ${JSON.stringify(rollupProp)}`);
         }
       }
     } catch (error) {
@@ -131,7 +141,6 @@ export class SyncService {
       const notionTasks = await NotionService.getTodayTimedTasks(todayStr);
 
       for (const notionTask of notionTasks) {
-        // Find matching task in database by Notion page ID
         const { rows } = await pool.query(
           `SELECT id, task_name, gcal_event_id FROM processed_tasks 
            WHERE notion_id = $1 AND gcal_event_id IS NOT NULL 
@@ -143,7 +152,6 @@ export class SyncService {
 
         const dbTask = rows[0];
 
-        // Detect if user modified the task title/time in Notion
         if (notionTask.taskName !== dbTask.task_name) {
           logger.info(`Detected task edit in Notion: "${dbTask.task_name}" -> "${notionTask.taskName}"`);
 
@@ -160,7 +168,6 @@ export class SyncService {
           );
 
           if (success) {
-            // Update PostgreSQL so we don't process this edit repeatedly
             await pool.query(
               'UPDATE processed_tasks SET task_name = $1 WHERE id = $2',
               [notionTask.taskName, dbTask.id]
