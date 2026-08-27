@@ -24,8 +24,9 @@ export class NotionService {
 
   /**
    * Helper to extract a valid ISO Date string (YYYY-MM-DD) from strings or objects.
+   * Hardened to explicitly handle array-based Notion Rollups.
    */
-  private static extractIsoDate(input: any): string | null {
+  public static extractIsoDate(input: any): string | null {
     if (!input) return null;
 
     let dateStr: string | null = null;
@@ -39,8 +40,13 @@ export class NotionService {
         dateStr = input.start;
       } else if (input.date && input.date.start) {
         dateStr = input.date.start;
-      } else if (input.rollup && input.rollup.date && input.rollup.date.start) {
-        dateStr = input.rollup.date.start;
+      } else if (input.rollup) {
+        // Rollups of dates usually return as arrays in Notion's API
+        if (input.rollup.date && input.rollup.date.start) {
+          dateStr = input.rollup.date.start;
+        } else if (input.rollup.array && Array.isArray(input.rollup.array) && input.rollup.array.length > 0) {
+          return NotionService.extractIsoDate(input.rollup.array[0]);
+        }
       } else if (input.array && Array.isArray(input.array) && input.array.length > 0) {
         return NotionService.extractIsoDate(input.array[0]);
       }
@@ -344,80 +350,49 @@ export class NotionService {
   }
 
   /**
-   * Queries Daily Tasks database for completed tasks with a relation.
+   * Queries the Assignments Database for pages where the native 'Done' Date field is empty.
    */
-  public static async getCompletedUnsyncedTasks(): Promise<any[]> {
-    const dailyTasksDbId = process.env.NOTION_DATABASE_ID || '';
+  public static async getAssignmentsWithEmptyDone(): Promise<any[]> {
+    const assignmentsDbId = process.env.NOTION_ASSIGNMENTS_DB_ID || '';
+    if (!assignmentsDbId) {
+      logger.warn('NOTION_ASSIGNMENTS_DB_ID is not configured in environment variables.');
+      return [];
+    }
 
     try {
       const response = await notion.databases.query({
-        database_id: dailyTasksDbId,
+        database_id: assignmentsDbId,
         filter: {
-          and: [
-            {
-              property: 'Done',
-              checkbox: {
-                equals: true,
-              },
-            },
-            {
-              property: 'Completed On',
-              date: {
-                is_not_empty: true,
-              },
-            },
-            {
-              property: 'School Assignment',
-              relation: {
-                is_not_empty: true,
-              },
-            },
-          ],
+          property: 'Done',
+          date: {
+            is_empty: true,
+          },
         },
       });
-
       return response.results;
     } catch (error) {
-      logger.error('Error fetching completed unsynced tasks from Notion:', error);
+      logger.error('Error fetching assignments with empty Done date:', error);
       return [];
     }
   }
 
   /**
-   * Updates the linked Assignment record's "Done" timestamp if it is currently empty.
+   * Updates an Assignment page's native 'Done' Date property.
    */
-  public static async updateAssignmentDone(assignmentId: any, completedOn: any): Promise<void> {
+  public static async setAssignmentDoneDate(pageId: string, dateStr: string): Promise<void> {
     try {
-      const cleanAssignmentId = NotionService.extractId(assignmentId);
-      if (!cleanAssignmentId) return;
-
-      const cleanCompletedOn = NotionService.extractIsoDate(completedOn);
-      if (!cleanCompletedOn) return;
-
-      const assignmentPage = (await notion.pages.retrieve({ page_id: cleanAssignmentId })) as any;
-      if (!assignmentPage || !assignmentPage.properties) return;
-
-      const doneProp = assignmentPage.properties['Done'];
-      if (!doneProp || doneProp.type !== 'date') return;
-
-      const currentDoneDate = doneProp.date?.start;
-
-      if (!currentDoneDate) {
-        await notion.pages.update({
-          page_id: cleanAssignmentId,
-          properties: {
-            'Done': {
-              date: {
-                start: cleanCompletedOn,
-              },
+      await notion.pages.update({
+        page_id: pageId,
+        properties: {
+          'Done': {
+            date: {
+              start: dateStr,
             },
           },
-        });
-        logger.info(`Updated Assignment (${cleanAssignmentId}) 'Done' to ${cleanCompletedOn}`);
-      }
+        },
+      });
     } catch (error) {
-      logger.error(`Failed to update Assignment in Notion:`, error);
-      throw error;
+      logger.error(`Failed to update Done date for Assignment ${pageId}:`, error);
     }
   }
 

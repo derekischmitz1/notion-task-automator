@@ -96,51 +96,27 @@ export class SyncService {
   }
 
   /**
-   * Syncs completed tasks to their respective Notion school assignments.
+   * Syncs dates from the "Completed On (Daily Tasks)" Rollup into the native "Done" Date property in Assignments.
    */
   static async syncAssignments(): Promise<void> {
-    logger.info('Starting assignment completion sync...');
+    logger.info('Starting assignment completion sync from Rollup...');
 
     try {
-      await SyncService.ensureTableExists();
-    } catch (dbInitError) {
-      logger.error('Failed to initialize sync_history table in PostgreSQL database:', { error: dbInitError });
-      return;
-    }
+      // Pulling directly from Notion DB instead of pg sync_history wrapper to avoid false skipping
+      const uncompletedAssignments = await NotionService.getAssignmentsWithEmptyDone();
 
-    const tasks = await NotionService.getCompletedUnsyncedTasks();
+      for (const page of uncompletedAssignments) {
+        // Extract date directly from the 'Completed On (Daily Tasks)' Rollup property
+        const rollupProp = page.properties['Completed On (Daily Tasks)'];
+        const completedDate = NotionService.extractIsoDate(rollupProp);
 
-    for (const task of tasks) {
-      try {
-        const taskId = task.id;
-        const taskName = task.properties['Task']?.title[0]?.plain_text || 'Unknown';
-        
-        if (taskName === 'Pending' || taskName.toUpperCase() === 'GET DA UPPY') continue;
-
-        const assignmentRelations = task.properties['School Assignment']?.relation;
-        if (!assignmentRelations || assignmentRelations.length === 0) continue;
-
-        const assignmentId = assignmentRelations[0].id;
-        const completedOn = task.properties['Completed On']?.date?.start;
-
-        if (!completedOn) continue;
-
-        const check = await pool.query(
-          'SELECT id FROM sync_history WHERE task_notion_id = $1 AND assignment_notion_id = $2',
-          [taskId, assignmentId]
-        );
-
-        if (check.rowCount === 0) {
-          await NotionService.updateAssignmentDone(assignmentId, completedOn);
-          await pool.query(
-            'INSERT INTO sync_history (task_notion_id, assignment_notion_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-            [taskId, assignmentId]
-          );
-          logger.info('Successfully synced assignment completion', { taskId, assignmentId });
+        if (completedDate) {
+          await NotionService.setAssignmentDoneDate(page.id, completedDate);
+          logger.info(`Updated Assignment (${page.id}) 'Done' date to ${completedDate}`);
         }
-      } catch (error) {
-        logger.error('Failed to sync a task', { taskId: task.id, error });
       }
+    } catch (error) {
+      logger.error('Failed during assignment Rollup sync', { error });
     }
   }
 
