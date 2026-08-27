@@ -23,8 +23,24 @@ export class NotionService {
   }
 
   /**
+   * Retrieves a specific page property item directly.
+   * Required when Notion's database query endpoint returns uncomputed nulls for Rollups.
+   */
+  public static async fetchPropertyItem(pageId: string, propertyId: string): Promise<any> {
+    try {
+      return await notion.pages.properties.retrieve({
+        page_id: pageId,
+        property_id: propertyId,
+      });
+    } catch (error) {
+      logger.error(`Failed to retrieve property ${propertyId} for page ${pageId}:`, error);
+      return null;
+    }
+  }
+
+  /**
    * Helper to extract a valid ISO Date string (YYYY-MM-DD) from strings, Date objects,
-   * or nested Notion Rollup objects/arrays.
+   * direct property responses, or nested Notion Rollup objects/arrays.
    */
   public static extractIsoDate(input: any): string | null {
     if (!input) return null;
@@ -36,7 +52,12 @@ export class NotionService {
     } else if (input instanceof Date) {
       return input.toISOString().split('T')[0];
     } else if (typeof input === 'object') {
-      if (input.start && typeof input.start === 'string') {
+      if (input.object === 'list' && Array.isArray(input.results)) {
+        for (const item of input.results) {
+          const res = NotionService.extractIsoDate(item);
+          if (res) return res;
+        }
+      } else if (input.start && typeof input.start === 'string') {
         dateStr = input.start;
       } else if (input.date && input.date.start) {
         dateStr = input.date.start;
@@ -45,11 +66,17 @@ export class NotionService {
       } else if (input.rollup) {
         if (input.rollup.date && input.rollup.date.start) {
           dateStr = input.rollup.date.start;
-        } else if (input.rollup.array && Array.isArray(input.rollup.array) && input.rollup.array.length > 0) {
-          return NotionService.extractIsoDate(input.rollup.array[0]);
+        } else if (input.rollup.array && Array.isArray(input.rollup.array)) {
+          for (const item of input.rollup.array) {
+            const res = NotionService.extractIsoDate(item);
+            if (res) return res;
+          }
         }
-      } else if (input.array && Array.isArray(input.array) && input.array.length > 0) {
-        return NotionService.extractIsoDate(input.array[0]);
+      } else if (input.array && Array.isArray(input.array)) {
+        for (const item of input.array) {
+          const res = NotionService.extractIsoDate(item);
+          if (res) return res;
+        }
       }
     }
 
@@ -76,7 +103,7 @@ export class NotionService {
   }
 
   /**
-   * Extracts class code and assignment name from task strings (handles course codes like SOC 408-2C or CHEM 101-L1).
+   * Extracts class code and assignment name from task strings.
    */
   private static parseAcademicTaskName(taskName: string): { classCode: string; assignmentText: string } | null {
     const cleanName = taskName
@@ -232,9 +259,7 @@ export class NotionService {
           cleanAssignmentText.includes(cleanNotionName) ||
           cleanNotionName.includes(cleanAssignmentText)
         ) {
-          logger.info(
-            `Matched task "${taskName}" to Notion Assignment Page ID: ${page.id}`
-          );
+          logger.info(`Matched task "${taskName}" to Notion Assignment Page ID: ${page.id}`);
           return page.id;
         }
       }
@@ -291,47 +316,25 @@ export class NotionService {
 
       const properties: any = {
         Task: {
-          title: [
-            {
-              text: {
-                content: taskName,
-              },
-            },
-          ],
+          title: [{ text: { content: taskName } }],
         },
         Category: {
-          rich_text: [
-            {
-              text: {
-                content: category || '',
-              },
-            },
-          ],
+          rich_text: [{ text: { content: category || '' } }],
         },
         'Pull Date': {
-          date: {
-            start: pullDate,
-          },
+          date: { start: pullDate },
         },
       };
 
       if (assignmentId) {
         properties['School Assignment'] = {
-          relation: [
-            {
-              id: assignmentId,
-            },
-          ],
+          relation: [{ id: assignmentId }],
         };
       }
 
       if (counterLinkId) {
         properties['Counter Link'] = {
-          relation: [
-            {
-              id: counterLinkId,
-            },
-          ],
+          relation: [{ id: counterLinkId }],
         };
       }
 
@@ -349,29 +352,48 @@ export class NotionService {
   }
 
   /**
-   * Queries the Assignments Database for pages where the native 'Done' Date field is empty.
+   * Fetches Assignment page IDs that are explicitly linked to today's Daily Tasks.
    */
-  public static async getAssignmentsWithEmptyDone(): Promise<any[]> {
-    const assignmentsDbId = process.env.NOTION_ASSIGNMENTS_DB_ID || '';
-    if (!assignmentsDbId) {
-      logger.warn('NOTION_ASSIGNMENTS_DB_ID is not configured in environment variables.');
-      return [];
-    }
+  public static async getTodayLinkedAssignmentIds(pullDate: string): Promise<string[]> {
+    const databaseId = process.env.NOTION_DATABASE_ID;
+    if (!databaseId) return [];
 
     try {
       const response = await notion.databases.query({
-        database_id: assignmentsDbId,
+        database_id: databaseId,
         filter: {
-          property: 'Done',
-          date: {
-            is_empty: true,
-          },
+          property: 'Pull Date',
+          date: { equals: pullDate },
         },
       });
-      return response.results;
+
+      const assignmentIds = new Set<string>();
+
+      for (const page of response.results as any[]) {
+        const relationProp = page.properties['School Assignment'];
+        if (relationProp?.relation && Array.isArray(relationProp.relation)) {
+          for (const rel of relationProp.relation) {
+            if (rel.id) assignmentIds.add(rel.id);
+          }
+        }
+      }
+
+      return Array.from(assignmentIds);
     } catch (error) {
-      logger.error('Error fetching assignments with empty Done date:', error);
+      logger.error("Error fetching today's linked assignments:", error);
       return [];
+    }
+  }
+
+  /**
+   * Retrieves a single Assignment page by its Page ID.
+   */
+  public static async getAssignmentPage(pageId: string): Promise<any> {
+    try {
+      return await notion.pages.retrieve({ page_id: pageId });
+    } catch (error) {
+      logger.error(`Failed to fetch assignment page ${pageId}:`, error);
+      return null;
     }
   }
 
@@ -383,10 +405,8 @@ export class NotionService {
       await notion.pages.update({
         page_id: pageId,
         properties: {
-          'Done': {
-            date: {
-              start: dateStr,
-            },
+          Done: {
+            date: { start: dateStr },
           },
         },
       });
@@ -409,15 +429,11 @@ export class NotionService {
           and: [
             {
               property: 'Pull Date',
-              date: {
-                equals: pullDate,
-              },
+              date: { equals: pullDate },
             },
             {
               property: 'Category',
-              rich_text: {
-                contains: 'Timed',
-              },
+              rich_text: { contains: 'Timed' },
             },
           ],
         },

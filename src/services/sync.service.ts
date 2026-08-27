@@ -97,36 +97,73 @@ export class SyncService {
 
   /**
    * Syncs dates from the Rollup column into the native "Done" Date property in Assignments.
-   * Utilizes dynamic key searching and verbose logging to prevent property mismatch issues.
+   * Scoped strictly to Assignments explicitly linked in TODAY'S Daily Tasks database.
    */
   static async syncAssignments(): Promise<void> {
-    logger.info('Starting assignment completion sync from Rollup...');
+    logger.info('Starting targeted assignment completion sync...');
 
     try {
-      const uncompletedAssignments = await NotionService.getAssignmentsWithEmptyDone();
-      logger.info(`Found ${uncompletedAssignments.length} assignment(s) with empty 'Done' field.`);
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+      // This helper is optional so assignment sync remains compatible with
+      // NotionService versions that do not expose it yet.
+      const getTodayLinkedAssignmentIds = (
+        NotionService as typeof NotionService & {
+          getTodayLinkedAssignmentIds?: (date: string) => Promise<string[]>;
+        }
+      ).getTodayLinkedAssignmentIds;
 
-      for (const page of uncompletedAssignments) {
+      if (!getTodayLinkedAssignmentIds) {
+        logger.warn('NotionService does not support linked assignment lookup. Skipping assignment sync.');
+        return;
+      }
+
+      const linkedAssignmentIds = await getTodayLinkedAssignmentIds.call(NotionService, todayStr);
+
+      if (linkedAssignmentIds.length === 0) {
+        logger.info(`No linked assignments found for today (${todayStr}). Skipping assignment sync.`);
+        return;
+      }
+
+      logger.info(`Found ${linkedAssignmentIds.length} assignment(s) linked to today's tasks.`);
+
+      for (const assignmentId of linkedAssignmentIds) {
+        const page = await NotionService.getAssignmentPage(assignmentId);
+        if (!page || !page.properties) continue;
+
+        // Skip if assignment is already marked Done
+        const doneDate = page.properties['Done']?.date?.start;
+        if (doneDate) {
+          logger.info(`Assignment (${assignmentId}) is already marked Done on ${doneDate}. Skipping.`);
+          continue;
+        }
+
         const propEntries = Object.entries(page.properties);
         const rollupEntry = propEntries.find(([key]) => key.toLowerCase().includes('completed on'));
 
         if (!rollupEntry) {
-          logger.warn(`Assignment (${page.id}) missing 'Completed On' rollup column. Available props: ${Object.keys(page.properties).join(', ')}`);
+          logger.warn(`Assignment (${assignmentId}) missing 'Completed On' rollup column.`);
           continue;
         }
 
-        const [propName, rollupProp] = rollupEntry;
-        const completedDate = NotionService.extractIsoDate(rollupProp);
+        const [propName, rollupProp] = rollupEntry as [string, any];
+        let completedDate = NotionService.extractIsoDate(rollupProp);
+
+        // Fallback: Fetch Rollup property directly from API if initial property payload returned date: null
+        if (!completedDate && rollupProp?.id) {
+          logger.info(`Assignment (${assignmentId}) rollup returned null date in initial payload. Fetching property directly...`);
+          const freshProp = await NotionService.fetchPropertyItem(page.id, rollupProp.id);
+          completedDate = NotionService.extractIsoDate(freshProp);
+        }
 
         if (completedDate) {
           await NotionService.setAssignmentDoneDate(page.id, completedDate);
-          logger.info(`Successfully updated Assignment (${page.id}) 'Done' date to ${completedDate} using column '${propName}'`);
+          logger.info(`Successfully updated Assignment (${page.id}) 'Done' date to ${completedDate}`);
         } else {
-          logger.info(`Assignment (${page.id}) found column '${propName}', but extracted date was null. Raw property payload: ${JSON.stringify(rollupProp)}`);
+          logger.info(`Assignment (${page.id}) is linked to today's tasks, but the completion date rollup is still empty.`);
         }
       }
     } catch (error) {
-      logger.error('Failed during assignment Rollup sync', { error });
+      logger.error('Failed during target assignment sync', { error });
     }
   }
 
