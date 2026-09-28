@@ -8,14 +8,6 @@ export interface ExtractedTask {
   category: string;
 }
 
-const MODEL_CANDIDATES = [
-  'gemini-flash-latest',
-  'gemini-3.8-flash',
-  'gemini-3.5-flash',
-  'gemini-2.5-flash',
-  'gemini-pro-latest',
-];
-
 const safetySettings = [
   {
     category: HarmCategory.HARM_CATEGORY_HARASSMENT,
@@ -36,6 +28,64 @@ const safetySettings = [
 ];
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// --- Dynamic Model Fetching Logic ---
+let cachedCandidates: string[] | null = null;
+let lastFetchTime = 0;
+const CACHE_TTL_MS = 60 * 60 * 1000; // Cache for 1 hour
+
+/**
+ * Dynamically fetches valid models from Google AI API for the current API key.
+ * This eliminates 404 errors from hardcoded/deprecated model names.
+ */
+async function getModelCandidates(): Promise<string[]> {
+  const now = Date.now();
+  if (cachedCandidates && now - lastFetchTime < CACHE_TTL_MS) {
+    return cachedCandidates;
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  // Safe, officially supported fallbacks if the API call fails
+  const fallbackList = ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro'];
+
+  if (!apiKey) return fallbackList;
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+    );
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const data = (await response.json()) as {
+      models?: Array<{ name: string; supportedGenerationMethods?: string[] }>;
+    };
+
+    // Filter for text generation models and strip the 'models/' prefix
+    const activeModels = (data.models || [])
+      .filter((m) => m.supportedGenerationMethods?.includes('generateContent'))
+      .map((m) => m.name.replace(/^models\//, ''));
+
+    if (activeModels.length === 0) return fallbackList;
+
+    // Prioritize 'flash' models first for speed, then others
+    activeModels.sort((a, b) => {
+      const aIsFlash = a.includes('flash') ? -1 : 1;
+      const bIsFlash = b.includes('flash') ? -1 : 1;
+      return aIsFlash - bIsFlash;
+    });
+
+    cachedCandidates = activeModels;
+    lastFetchTime = now;
+    return activeModels;
+  } catch (error) {
+    logger.warn('Failed to dynamically list Gemini models. Using fallback list.', error);
+    return fallbackList;
+  }
+}
+// ------------------------------------
 
 export async function parseTaskFromEmail(emailBody: string, maxRetriesPerModel = 2): Promise<ExtractedTask[]> {
   const systemInstruction = 'You are an expert AI parser for inbound emails. Your job is to extract actionable tasks and structure them into a strict JSON array based on explicit formatting rules.';
@@ -92,7 +142,9 @@ The system requires an array of objects matching the { "taskName": string, "cate
 ${emailBody}
   `;
 
-  for (const modelName of MODEL_CANDIDATES) {
+  const candidates = await getModelCandidates();
+
+  for (const modelName of candidates) {
     let attempt = 0;
 
     while (attempt < maxRetriesPerModel) {
@@ -100,7 +152,8 @@ ${emailBody}
       try {
         const model = genAI.getGenerativeModel({ 
           model: modelName,
-          systemInstruction: systemInstruction 
+          systemInstruction: systemInstruction,
+          safetySettings: safetySettings // Added this so it actually uses the settings defined above
         });
 
         logger.info(`Attempting task parsing with candidate model: ${modelName} (Attempt ${attempt})`);
@@ -128,7 +181,7 @@ ${emailBody}
           await sleep(3000);
         } else {
           logger.warn(`Model candidate '${modelName}' failed (${status || error?.message || 'unknown error'}). Trying next candidate...`);
-          break;
+          break; // Break the while loop, move to the next model in the for loop
         }
       }
     }
