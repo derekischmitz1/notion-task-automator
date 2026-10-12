@@ -90,6 +90,15 @@ async function getModelCandidates(): Promise<string[]> {
 export async function parseTaskFromEmail(emailBody: string, maxRetriesPerModel = 2): Promise<ExtractedTask[]> {
   const systemInstruction = 'You are an expert AI parser for inbound emails. Your job is to extract actionable tasks and structure them into a strict JSON array based on explicit formatting rules.';
   
+  // Calculate the current time in HHMM format for the GET DA UPPY task based on receipt time
+  const now = new Date();
+  const receiptTimeHHMM = now.toLocaleTimeString('en-US', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'America/Chicago' // Aligns with your local time
+  }).replace(':', '');
+
   const prompt = `
 ### EXTRACTION RULES:
 
@@ -97,11 +106,11 @@ export async function parseTaskFromEmail(emailBody: string, maxRetriesPerModel =
    - Filter out greetings, signatures, jokes, conversational filler, and disclaimers.
    - Extract ONLY actionable tasks.
 
-2. **Mandatory Task & Sequential Numbering for General Tasks**:
-   - ALWAYS include a task named "1.1. GET DA UPPY" under the category "1. General", even if it is not present in the email text.
-   - ALL tasks assigned to "1. General" MUST be sequentially numbered in their "taskName" AND prefixed with the category number (e.g., "1.1. GET DA UPPY", "1.2. Put on watch and ring", "1.3. Fill up Mtn Dew").
+2. **Sequential Numbering for General Tasks**:
+   - ALL tasks assigned to "1. General" MUST be sequentially numbered in their "taskName" AND prefixed with the category number (e.g., "1.1. Put on watch and ring", "1.2. Fill up Mtn Dew").
 
 3. **Timed Task Identification & Formatting**:
+   - ALWAYS include a task named "2.${receiptTimeHHMM}: GET DA UPPY" under the category "2. Timed Events", even if it is not present in the email text.
    - A task is ONLY a timed task if ITS OWN LINE explicitly contains a time prefix (e.g., "7:45a SHOWER", "9:30a: SOC 408-2C: Lecture 3", "10:30a: Brekkie and meds").
    - Convert the time into 24-hour HHMM format followed by a colon and the task name:
      - Prefix it with "2." WITH NO SPACE between the period and time:
@@ -118,19 +127,20 @@ export async function parseTaskFromEmail(emailBody: string, maxRetriesPerModel =
 
 5. **Line-by-Line Isolation Rule**:
    - Do NOT inherit timed categories for subsequent lines just because they follow a timed line.
-   - Independent non-timed lines (e.g., "Brush teeth", "Put on deodorant") MUST remain standalone tasks assigned to "1. General" with sequential numbering (e.g., "1.4. Brush teeth").
+   - Independent non-timed lines (e.g., "Brush teeth", "Put on deodorant") MUST remain standalone tasks assigned to "1. General" with sequential numbering (e.g., "1.3. Brush teeth").
 
 6. **Category Assignment Rules**:
    - "1. General": Assigned to general, non-timed routine tasks.
-   - "2. Timed Events": Assigned to ALL tasks that start with an explicit timestamp.
+   - "2. Timed Events": Assigned to ALL tasks that start with an explicit timestamp (including the mandatory GET DA UPPY task).
    - Section Headers: Headers in the email (e.g., "Academic Tier 1:", "Academic Tier 2:") define new categories. Prefix these headers with sequential numbers matching their order of appearance (e.g., "Academic Tier 1:" becomes "3. Academic Tier 1", "Academic Tier 2:" becomes "4. Academic Tier 2").
+   - "With dinner" Section: If the email contains a "With dinner" or "With dinner:" section, assign it the NEXT available sequential category number following the academic tiers (e.g., "6. With dinner"). ALL tasks under this header MUST be assigned to this category and sequentially numbered starting from 1 (e.g., "6.1. Take vitamin B12", "6.2. Take calc 600", "6.3. Drink water/gatorade").
 
 7. **Preserve Priority Numbers and Parentheticals**:
    - When extracting numbered academic items (e.g., "9. PUH 201-F: DB Week 11 P2"), PRESERVE the item number and prefix it with the assigned category number (e.g., "3.9. PUH 201-F: DB Week 11 P2").
    - CRITICAL: PRESERVE all parenthetical notes and details in brackets exactly as written in the email.
 
 8. **Automatic Category Placeholders ("Pending")**:
-   - For EVERY category generated in the output array ("1. General", "2. Timed Events", "3. Academic Tier 1", etc.), ensure EXACTLY ONE placeholder task named "Pending" exists in that category.
+   - For EVERY category generated in the output array ("1. General", "2. Timed Events", "3. Academic Tier 1", "6. With dinner", etc.), ensure EXACTLY ONE placeholder task named "Pending" exists in that category.
    - DO NOT prefix the "Pending" task with a category number (it must be exactly "Pending").
 
 ---
@@ -141,6 +151,8 @@ The system requires an array of objects matching the { "taskName": string, "cate
 ### EMAIL TO PARSE:
 ${emailBody}
   `;
+
+  // ... (Keep your existing dynamically fetched candidates loop here)
 
   const candidates = await getModelCandidates();
 
