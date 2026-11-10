@@ -5,17 +5,24 @@ import { logger } from '../utils/logger';
 const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
 /**
- * Formats a date/time string into a naive ISO string (YYYY-MM-DDTHH:mm:ss)
- * for America/Chicago timezone, stripping stale hardcoded offsets.
+ * Extracts the raw, naive wall-clock time intended for America/Chicago.
+ * Prevents local server timezones (like UTC or EST) from shifting the time.
  */
 function getChicagoWallClockIso(isoStr: string): string {
   if (!isoStr) return isoStr;
 
-  // If input string has a hardcoded fixed offset (e.g., -05:00 or -06:00), strip it to preserve intended wall-clock time
+  // 1. If input string has a hardcoded fixed offset (e.g., -05:00 or -06:00), strip it to preserve intended wall-clock time
   if (/[+-]\d{2}:\d{2}$/.test(isoStr)) {
     return isoStr.replace(/[+-]\d{2}:\d{2}$/, '');
   }
 
+  // 2. If it is already a naive string (no Z, no offset), return it as-is.
+  // Running this through `new Date()` would evaluate it in the server's local timezone, causing an offset shift.
+  if (!isoStr.toUpperCase().endsWith('Z')) {
+    return isoStr.split('.')[0]; // strip milliseconds if any, returning clean naive string
+  }
+
+  // 3. If it is explicitly UTC (ends with Z), parse it into Chicago time.
   const d = new Date(isoStr);
   if (isNaN(d.getTime())) return isoStr;
 
@@ -42,19 +49,23 @@ function getChicagoWallClockIso(isoStr: string): string {
 
 /**
  * Dynamically resolves the IANA UTC offset (e.g., "-06:00" for CST or "-05:00" for CDT)
- * for America/Chicago on the specified wall-clock date.
+ * for America/Chicago by checking an absolute time.
  */
 function getChicagoOffset(wallClockIso: string): string {
   try {
-    const d = new Date(wallClockIso);
+    // Append a fallback -06:00 to create an absolute Date object within 1 hr of reality.
+    // This perfectly prevents DST boundary errors caused by parsing naive strings.
+    let d = new Date(`${wallClockIso}-06:00`);
+    if (isNaN(d.getTime())) d = new Date();
+
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/Chicago',
       timeZoneName: 'longOffset',
-    }).formatToParts(isNaN(d.getTime()) ? new Date() : d);
+    }).formatToParts(d);
 
     const tzPart = parts.find((p) => p.type === 'timeZoneName');
     if (tzPart && tzPart.value) {
-      return tzPart.value.replace(/^GMT/, '');
+      return tzPart.value.replace(/^GMT/, '') || '-06:00';
     }
   } catch (err) {
     // Fallback if offset lookup fails
@@ -133,11 +144,14 @@ export async function createEventIfNoConflicts(
   const startWallClock = getChicagoWallClockIso(startTimeIso);
   const offset = getChicagoOffset(startWallClock);
 
+  // Parse exact, absolute Date objects based on correctly resolved local time and IANA offset
   const startDate = new Date(`${startWallClock}${offset}`);
+  if (isNaN(startDate.getTime())) {
+    logger.error(`Invalid start date calculated from: ${startTimeIso}`);
+    return null;
+  }
+  
   const endDate = new Date(startDate.getTime() + 10 * 60 * 1000);
-
-  const startGCalIso = startWallClock;
-  const endGCalIso = getChicagoWallClockIso(endDate.toISOString());
 
   const freeBusyStartIso = startDate.toISOString();
   const freeBusyEndIso = endDate.toISOString();
@@ -189,17 +203,18 @@ export async function createEventIfNoConflicts(
       return null;
     }
 
-    // 3. Insert event explicitly into the target calendar using America/Chicago timezone
+    // 3. Insert event explicitly. Providing full UTC ISO strings entirely eliminates 
+    // naive string misinterpretation by Google Calendar APIs.
     const eventRes = await calendar.events.insert({
       calendarId: targetCalendarId,
       requestBody: {
         summary: title,
         start: {
-          dateTime: startGCalIso,
+          dateTime: startDate.toISOString(),
           timeZone: 'America/Chicago',
         },
         end: {
-          dateTime: endGCalIso,
+          dateTime: endDate.toISOString(),
           timeZone: 'America/Chicago',
         },
       },
@@ -232,10 +247,12 @@ export async function updateEventTime(
   const offset = getChicagoOffset(startWallClock);
 
   const startDate = new Date(`${startWallClock}${offset}`);
+  if (isNaN(startDate.getTime())) {
+    logger.error(`Invalid start date calculated from: ${startTimeIso}`);
+    return false;
+  }
+  
   const endDate = new Date(startDate.getTime() + 10 * 60 * 1000);
-
-  const startGCalIso = startWallClock;
-  const endGCalIso = getChicagoWallClockIso(endDate.toISOString());
 
   const freeBusyStartIso = startDate.toISOString();
   const freeBusyEndIso = endDate.toISOString();
@@ -284,18 +301,18 @@ export async function updateEventTime(
       return false;
     }
 
-    // 2. Patch existing event on Google Calendar using America/Chicago timezone
+    // 2. Patch existing event on Google Calendar using absolute UTC strings to avoid parsing shifts
     await calendar.events.patch({
       calendarId: targetCalendarId,
       eventId: eventId,
       requestBody: {
         summary: title,
         start: {
-          dateTime: startGCalIso,
+          dateTime: startDate.toISOString(),
           timeZone: 'America/Chicago',
         },
         end: {
-          dateTime: endGCalIso,
+          dateTime: endDate.toISOString(),
           timeZone: 'America/Chicago',
         },
       },
