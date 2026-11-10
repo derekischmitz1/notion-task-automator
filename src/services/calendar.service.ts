@@ -6,28 +6,29 @@ const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
 /**
  * Extracts the raw, naive wall-clock time intended for America/Chicago.
- * Prevents local server timezones (like UTC or EST) from shifting the time.
+ * It reverses the upstream parser's 5-hour offset (EST/CDT) to recover the original digits.
  */
 function getChicagoWallClockIso(isoStr: string): string {
   if (!isoStr) return isoStr;
 
-  // 1. If input string has a hardcoded fixed offset (e.g., -05:00 or -06:00), strip it to preserve intended wall-clock time
+  // 1. If input string has a hardcoded fixed offset (e.g., -05:00 or -06:00), strip it
   if (/[+-]\d{2}:\d{2}$/.test(isoStr)) {
     return isoStr.replace(/[+-]\d{2}:\d{2}$/, '');
   }
 
-  // 2. If it is already a naive string (no Z, no offset), return it as-is.
-  // Running this through `new Date()` would evaluate it in the server's local timezone, causing an offset shift.
+  // 2. If it is already a naive string (no Z, no offset), return it as-is
   if (!isoStr.toUpperCase().endsWith('Z')) {
-    return isoStr.split('.')[0]; // strip milliseconds if any, returning clean naive string
+    return isoStr.split('.')[0]; 
   }
 
-  // 3. If it is explicitly UTC (ends with Z), parse it into Chicago time.
   const d = new Date(isoStr);
   if (isNaN(d.getTime())) return isoStr;
 
+  // 3. The absolute UTC time was parsed upstream with a 5-hour offset (EST or stale CDT).
+  // For example, 5:22 AM became 10:22 UTC. To extract the original wall-clock digits 
+  // you typed (5:22), we must view the UTC time from the perspective of UTC-5 (America/New_York).
   const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Chicago',
+    timeZone: 'America/New_York', // Reverses the UTC-5 shift applied upstream
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
